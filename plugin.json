@@ -1,0 +1,27 @@
+{
+  "$schema": "https://danklinux.com/schemas/plugin.json",
+  "id": "dankDictionary",
+  "name": "Dank Dictionary",
+  "description": "Dictionary lookup across 23 Wiktionary editions, with offline English definitions.",
+  "version": "1.3.0",
+  "author": "Triston Armstrong",
+  "type": "composite",
+  "capabilities": [
+    "dankbar-widget",
+    "daemon"
+  ],
+  "components": {
+    "widget": "./BarWidget.qml",
+    "daemon": "./DictionaryDaemon.qml"
+  },
+  "icon": "dictionary",
+  "requires_dms": ">=1.6.2",
+  "dependencies": [
+    "curl",
+    "gzip"
+  ],
+  "permissions": [
+    "process",
+    "network"
+  ]
+}
