@@ -24,7 +24,7 @@ Item {
 
     function currentStatus() {
         var host = DictionaryState.currentHost()
-        var panel = host ? (host.panelItem || host.panelInstance || host) : null
+        var panel = host ? (host.panelItem || host) : null
         return JSON.stringify({
             hostCount: DictionaryState.hostCount,
             opened: !!(host && host.opened),

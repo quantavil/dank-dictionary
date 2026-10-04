@@ -72,16 +72,20 @@ function apiBase(langCode) {
   return "https://" + code + ".wiktionary.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&titles="
 }
 
-// Build the curl argv for a single word lookup. encodeURIComponent is run by
-// curl itself via the URL we hand it, but pre-encoding here keeps the visible
-// fetch URL stable for logging / debugging. The User-Agent is required by
-// the Wikimedia API ToS.
+// Inject the release metadata from plugin.json; no duplicated release literal.
+var pluginVersion = ""
+function setPluginVersion(version) {
+  pluginVersion = String(version || "").replace(/[^0-9A-Za-z.+-]/g, "")
+}
+
+// Build curl argv, pre-encoding the title with encodeURIComponent here.
+// The User-Agent identifies this plugin to Wikimedia.
 function lookupArgs(word, langCode) {
   var w = String(word || "").trim()
   if (w === "") return []
   return [
     "curl", "-fsS", "--max-time", "5",
-    "-H", "User-Agent: dank-dictionary/1.3.0",
+    "-H", "User-Agent: dank-dictionary" + (pluginVersion ? "/" + pluginVersion : ""),
     apiBase(langCode) + encodeURIComponent(w)
   ]
 }
@@ -138,8 +142,7 @@ function parseResponse(raw, langCode) {
     return {
       ok: false,
       kind: "notfound",
-      error: String(data.message),
-      hint: data.resolution ? String(data.resolution) : ""
+      error: String(data.message)
     }
   }
   if (!Array.isArray(data) || data.length === 0) {
@@ -393,10 +396,12 @@ function wiktExtractDefs(headword, body) {
     }
   }
 
-  var skipRE = /^\s*(?:(?:Synonyms?|Antonyms?|Coordinate terms?|Related terms?|Derived terms?|Usage notes|See also|External links|Trivia|Footnotes|Source|Notes|History|Compare|Quotations|Anagrams?)(?:\s*:|\s*$)|For more quotations using this term\b)/i
-  // Require a date and attribution separator, not just a month or year word.
+  var skipRE = /^\s*(?:(?:Synonyms?|Antonyms?|Coordinate terms?|Related terms?|Derived terms?|Usage notes|See also|External links|Trivia|Footnotes|History|Compare|Quotations|Anagrams?)(?:\s*:|\s*$)|For more quotations using this term\b)/i
+  // A comma after a year can introduce a sense. Require an attribution cue
+  // (a trailing citation colon or an author reporting a quotation).
   var months = "(?:January|February|March|April|May|June|July|August|September|October|November|December)"
-  var attrStartRE = new RegExp("^(?:(?:(?:c\\.|ca\\.|circa)\\s*)?[12]\\d{3}(?:\\s*[:,]|\\s+" + months + "\\b)|" + months + "\\s+(?:(?:\\d{1,2}[, ]+)?[12]\\d{3}|\\d{1,2})\\s*[:,])")
+  var dateStart = "(?:(?:(?:c\\.|ca\\.|circa)\\s*)?[12]\\d{3}(?:\\s+" + months + "(?:\\s+\\d{1,2})?)?|" + months + "\\s+(?:(?:\\d{1,2}[, ]+)?[12]\\d{3}|\\d{1,2}))"
+  var attrStartRE = new RegExp("^" + dateStart + "\\s*(?::|,\\s*(?:.+:\\s*$|.+\\b(?:wrote|writes|said|says|quoted|quoting)\\b))", "i")
   var onlyLabelRE = /^\([A-Za-z][A-Za-z ,]*\)\s*$/
   var numberRangeRE = /^\d+\s*-\s*\d+,\s*\d/
 

@@ -77,7 +77,6 @@ Item {
   property var entry: null
   property string status: "idle"        // "idle" | "loading" | "ok" | "notfound" | "error" | "suggestions"
   property string statusMessage: ""
-  property int variants: 0               // > 1 when the API returned more than one entry object
 
   // Target language for lookups. Driven by the dropdown in the popup
   // header; default comes from Model.defaultLanguage so the panel and
@@ -130,7 +129,6 @@ Item {
   //      runLookup(), applyEdited(), and the language-change handler.
   function resetResults() {
     root.entry = null
-    root.variants = 0
     root.status = "idle"
     root.statusMessage = ""
     root.suggestions = []
@@ -138,9 +136,16 @@ Item {
     root.isAutoMatched = false
   }
 
+  FileView {
+    id: manifestFile
+    path: Qt.resolvedUrl("plugin.json")
+    blockLoading: true
+  }
+
   // Inject the bundled wordlist into Model.js so fuzzyMatch() can use it,
   // and the bundled offline data dir so the local adapter can find it.
   Component.onCompleted: {
+    Model.setPluginVersion(JSON.parse(manifestFile.text()).version)
     if (typeof Model.setWordlist === "function" && typeof Wordlist.ENGLISH_WORDLIST !== "undefined")
       Model.setWordlist(Wordlist.ENGLISH_WORDLIST)
     if (typeof Model.setDataDir === "function")
@@ -204,7 +209,6 @@ Item {
     if (!preserveRecovery) root.resetResults()
     else {
       root.entry = null
-      root.variants = 0
       root.suggestions = []
     }
     root.status = "loading"
@@ -217,7 +221,10 @@ Item {
   property string activeQuery: ""
   property string activeLanguage: ""
   property var pendingArgs: []
-  property bool adapterCompleted: false
+  property bool processStarted: false
+  property bool processExited: false
+  property bool stdoutFinished: false
+  property string adapterOutput: ""
   property bool processBusy: false
 
   function cancelLookup() {
@@ -236,7 +243,10 @@ Item {
     root.activeAdapter = root.adapterQueue[root.adapterIndex]
     root.activeQuery = root.query
     root.activeLanguage = root.language
-    root.adapterCompleted = false
+    root.processStarted = false
+    root.processExited = false
+    root.stdoutFinished = false
+    root.adapterOutput = ""
     root.processBusy = true
     lookupProc.running = true
   }
@@ -344,72 +354,60 @@ Item {
     }
   }
 
-  // Lookup process. Each adapter in the chain gets one run of this process:
-  // curl for the network adapters, gzip for the local one. Curl exits 22
-  // on the not-found path (HTTP 404), which is not a network error from
-  // the user's perspective; the response body carries the API's own
-  // message, so we always try to parse stdout first.
+  // All process events join here. A normal run needs both EOF and exit,
+  // in either order; FailedToStart has neither started nor exited signals.
+  function adapterEvent(event, output) {
+    if (!root.processBusy) return
+    if (event === "started") root.processStarted = true
+    else if (event === "stdout") {
+      root.stdoutFinished = true
+      root.adapterOutput = output
+    } else if (event === "exited") root.processExited = true
+    else if (event === "stopped") {
+      if (root.processStarted) return
+      root.processExited = true
+      root.stdoutFinished = true
+    }
+    if (!root.processExited || !root.stdoutFinished) return
+
+    root.processBusy = false
+    if (root.status === "loading" && root.activeGeneration === root.lookupGeneration) {
+      var result = { ok: false, kind: "error", error: "could not start the dictionary command" }
+      if (root.processStarted) {
+        try {
+          result = root.activeAdapter.parse(root.adapterOutput, root.activeQuery, root.activeLanguage)
+        } catch (e) {
+          console.warn("dank-dictionary: adapter", root.activeAdapter && root.activeAdapter.id, "parse failed:", e)
+          result = { ok: false, kind: "error", error: "could not parse the dictionary response" }
+        }
+      }
+      if (result && result.ok) {
+        root.entry = result.entry
+        root.status = "ok"
+        root.statusMessage = ""
+      } else if (!root.tryNextAdapter()) {
+        root.onAdapterChainExhausted(result)
+      }
+    }
+    if (root.pendingArgs.length > 0) Qt.callLater(root.startPendingAdapter)
+  }
+
   Process {
     id: lookupProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: {
-        if (root.status !== "loading" || root.activeGeneration !== root.lookupGeneration) return
-        root.adapterCompleted = true
-        var adapter = root.activeAdapter
-        var result = null
-        try {
-          result = adapter.parse(text, root.activeQuery, root.activeLanguage)
-        } catch (e) {
-          console.warn("dank-dictionary: adapter", adapter && adapter.id, "parse failed:", e)
-        }
-        if (result && result.ok) {
-          root.entry = result.entry
-          root.variants = result.variants || 0
-          root.status = "ok"
-          root.statusMessage = ""
-          // originalQuery stays put when isAutoMatched is true so the
-          // result body can render "showing 'X' for 'Y'".
-        } else if (root.tryNextAdapter()) {
-          // A miss or failure in one adapter falls through to the next —
-          // e.g. a word missing from the local Webster's is retried
-          // against Wiktionary when online.
-          return
-        } else {
-          root.onAdapterChainExhausted(result)
-        }
-      }
+      onStreamFinished: root.adapterEvent("stdout", text)
     }
-    stderr: StdioCollector {
-      id: lookupStderr
-      waitForEnd: true
-    }
+    onStarted: root.adapterEvent("started", "")
+    onExited: root.adapterEvent("exited", "")
     onRunningChanged: {
-      if (!running) Qt.callLater(function() {
-        // FailedToStart has no exited signal. Normal exits finish first.
-        if (!root.processBusy || lookupProc.running) return
-        root.processBusy = false
-        if (root.pendingArgs.length > 0) {
-          root.startPendingAdapter()
-          return
-        }
-        if (root.status !== "loading" || root.activeGeneration !== root.lookupGeneration || root.adapterCompleted) return
-        if (root.tryNextAdapter()) return
-        root.status = "error"
-        root.statusMessage = "could not start the dictionary command"
-      })
-    }
-    onExited: function(exitCode) {
-      root.processBusy = false
-      if (root.pendingArgs.length > 0) {
-        Qt.callLater(root.startPendingAdapter)
-        return
+      if (!running) {
+        var generation = root.activeGeneration
+        Qt.callLater(function() {
+          if (generation === root.activeGeneration && !lookupProc.running)
+            root.adapterEvent("stopped", "")
+        })
       }
-      if (root.status !== "loading" || root.activeGeneration !== root.lookupGeneration || root.adapterCompleted) return
-      if (root.tryNextAdapter()) return
-      root.entry = null
-      root.status = "error"
-      root.statusMessage = "could not reach the dictionary service"
     }
   }
 
@@ -462,8 +460,7 @@ Item {
               text: {
                 if (root.status === "ok" && root.entry) {
                   var parts = root.heroSummary
-                  var suffix = root.variants > 1 ? " · " + root.variants + " entries" : ""
-                  return (parts === "" ? "found" : parts) + suffix
+                  return parts === "" ? "found" : parts
                 }
                 if (root.status === "loading") return "looking up…"
                 if (root.status === "notfound") return "no definition"

@@ -33,6 +33,28 @@ ShellRoot {
         }
         return null
     }
+    function checkCompletionOrder(first, second) {
+        var parses = 0
+        panel.status = "loading"
+        panel.activeGeneration = panel.lookupGeneration
+        panel.activeQuery = "ordered"
+        panel.activeLanguage = "en"
+        panel.activeAdapter = { parse: function(text) {
+            parses++
+            return { ok: true, entry: { word: text, meanings: [] } }
+        } }
+        panel.processBusy = true
+        panel.processStarted = true
+        panel.processExited = false
+        panel.stdoutFinished = false
+        panel.adapterEvent(first, "ordered")
+        root.check(panel.status === "loading" && parses === 0, "first " + first + " waits for other completion")
+        panel.adapterEvent(second, "ordered")
+        root.check(panel.status === "ok" && panel.entry.word === "ordered" && parses === 1,
+                   first + " then " + second + " parses exactly once")
+        panel.adapterEvent(second, "ordered")
+        root.check(parses === 1, "duplicate completion ignored")
+    }
     function stealFocus() { frameworkFocus.forceActiveFocus() }
     function next() { phase++; ticks = 0 }
     function finish(error) {
@@ -110,6 +132,8 @@ ShellRoot {
                     root.check(panel.status === "ok", "offline lookup succeeds")
                     root.check(panel.entry.word === "hello" && panel.entry.source === "webster1913",
                                "actual gzip collector and Webster adapter parse fixture")
+                    root.check(panel.adapterQueue[1].argsFor("hello", "en").indexOf("User-Agent: dank-dictionary/9.8.7") >= 0,
+                               "request version comes from synthetic manifest release")
                     var label = root.findPartOfSpeechLabel(panel, panel.entry.meanings[0].partOfSpeech)
                     root.check(label !== null, "part of speech header is rendered")
                     var divider = label.parent.children[1]
@@ -234,6 +258,19 @@ ShellRoot {
                     if (root.ticks < 3) break
                     root.check(!root.findSearchField(panel).getActiveFocus(), "closed popup ignores late deferred editor focus")
                     root.check(frameworkFocus.activeFocus, "focus stays with host after immediate close")
+                    root.checkCompletionOrder("exited", "stdout")
+                    root.checkCompletionOrder("stdout", "exited")
+                    panel.status = "loading"
+                    panel.processBusy = true
+                    panel.processStarted = true
+                    panel.processExited = false
+                    panel.stdoutFinished = false
+                    panel.activeGeneration = panel.lookupGeneration - 1
+                    panel.adapterEvent("exited", "")
+                    panel.adapterEvent("stdout", "stale")
+                    root.check(panel.status === "loading" && panel.entry.word === "ordered",
+                               "stale generation cannot publish output")
+                    root.check(!panel.processBusy, "stale generation releases process")
                     root.finish(null)
                     break
                 }

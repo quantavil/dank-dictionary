@@ -10,9 +10,19 @@ trap 'rm -rf -- "$test_root"' EXIT
 mkdir -p "$test_root/tests" "$test_root/Common" "$test_root/Widgets" \
     "$test_root/data/webster" "$test_root/bin"
 cp "$test_dir/../Panel.qml" "$test_dir/../Model.js" \
-    "$test_dir/../wordlist.js" "$test_dir/../DictionaryState.qml" "$test_root/"
+    "$test_dir/../plugin.json" "$test_dir/../wordlist.js" "$test_dir/../DictionaryState.qml" "$test_root/"
 rg '^singleton DictionaryState |^Panel ' "$test_dir/../qmldir" > "$test_root/qmldir"
 cp "$test_dir/panel-runtime.qml" "$test_root/tests/PanelRuntime.qml"
+# A synthetic release proves Panel reads the manifest rather than a code literal.
+python3 - "$test_root/plugin.json" <<'PY_MANIFEST'
+import json
+import pathlib
+import sys
+manifest_path = pathlib.Path(sys.argv[1])
+manifest = json.loads(manifest_path.read_text())
+manifest["version"] = "9.8.7"
+manifest_path.write_text(json.dumps(manifest))
+PY_MANIFEST
 cat > "$test_root/shell.qml" <<'QML'
 import "tests"
 PanelRuntime {}

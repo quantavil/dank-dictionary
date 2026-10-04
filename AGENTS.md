@@ -14,9 +14,9 @@ generated; do not hand-edit them.
 bash tests/run.sh
 ```
 
-Suites: `lint.test.js` (2), `model.test.js` (292),
-`run-state-runtime.sh` (24), `run-panel-runtime.sh` (36),
-`build-webster.test.py` (10): 364 checks total.
+Suites: `lint.test.js` (2), `model.test.js` (296),
+`run-state-runtime.sh` (24), `run-panel-runtime.sh` (45),
+`build-webster.test.py` (10): 377 checks total.
 All must be green before a push.
 
 - `Model.js` is QML-loaded JavaScript. **No `const`/`let`** — the engine
@@ -68,6 +68,8 @@ future change, not something to bolt on ad hoc.
 
 The release version is tracked in `plugin.json`. The user removed the popup
 version label; do not add a build/version tag to the panel.
+Panel reads this manifest to inject the network User-Agent version into Model.js;
+do not duplicate a release number in lookupArgs.
 
 ## No shortcut installer
 
@@ -86,7 +88,7 @@ existing DMS IPC commands remain available.
 - `Panel.qml` receives `parentPopout` and `closePopout` from DMS. Enable
   `contentHandlesKeys` and use the inner DankTextField focus API.
 - Actual QML runtime checks run in `tests/run.sh`: `run-state-runtime.sh` (24)
-  and `run-panel-runtime.sh` (36).
+  and `run-panel-runtime.sh` (45).
   They run in a temporary offscreen Quickshell config, never in the live shell.
 
 ## Lookup correctness
@@ -94,8 +96,9 @@ existing DMS IPC commands remain available.
 - First-block removal is restricted to actual headword/inflection headers.
   Do not classify every alphabetic line as a header or reject short definitions.
 - Metadata labels and date attribution need structural recognition; plain senses
-  beginning with May, Source, or Notes are definitions. Short attributed quotes
-  remain quotations, not senses.
+  beginning with May, Source, or Notes (including colon-led senses) are definitions.
+  A year followed by a comma needs an attribution cue to be excluded.
+  Short attributed quotes remain quotations, not senses.
 - English POS allowlisting includes abbreviation, acronym, and ellipsis.
   Non-English POS can appear below etymology at level 4 or deeper.
 - Prefer the selected edition's corresponding language section, including
@@ -106,6 +109,11 @@ existing DMS IPC commands remain available.
   failed automatic correction so the notfound UI names the typed word.
 - Use Layout sizing for the POS label/divider row. Keep the search editor focused
   after DMS queues container focus, and guard deferred focus after popup dismissal.
+- Join stdout EOF and process exit in adapterEvent before parsing or advancing.
+  Either signal order must work; canceled generations cannot publish results.
+  FailedToStart is handled separately because it never emits started/exited.
+- Free Dictionary parsing is a tested compatibility path, not an active adapter.
+  Retain its tests when changing normalization; no unused hint/UI variants state.
 - No unused debounce timer: Enter/Search submit directly.
 
 ## Building and publishing

@@ -14,6 +14,7 @@ var assert = require("assert");
 
 // ── Load Model.js under test ────────────────────────────────────────────────
 var src = fs.readFileSync(path.join(__dirname, "..", "Model.js"), "utf8");
+var releaseVersion = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "plugin.json"), "utf8")).version;
 
 // Tiny synthetic wordlist that still lets the fuzzy-match code exercise its
 // prefilter / scoring logic.
@@ -32,7 +33,7 @@ var stripped = src
 // We need to add explicit export lines so Node can reach them.
 var PUBLIC_SYMBOLS = [
   "LANGUAGES","LANG_BY_VALUE","langLabel","langWikiName","defaultLanguage","languages",
-  "apiBase","lookupArgs","parseResponse","normalizeEntry","normalizeMeaning","normalizeDefinition","stringList",
+  "apiBase","setPluginVersion","lookupArgs","parseResponse","normalizeEntry","normalizeMeaning","normalizeDefinition","stringList",
   "parseSections","stripInlineHeaders","WIKT_POS_KEYS","WIKT_SKIP_DROP","WIKT_LANGUAGE_ALIASES",
   "wiktCanonicalPos","wiktExtractIpa","wiktIsInflectionLine","wiktExtractDefs",
   "parseWiktionaryWikitext","summaryLabel","sourceLabel","levenshtein","fuzzyMatch","setWordlist",
@@ -188,10 +189,16 @@ group("lookupArgs", function () {
     assert(a.indexOf("5") > -1);
   });
   test("includes -H User-Agent", function () {
+    M.setPluginVersion(releaseVersion);
     var a = M.lookupArgs("hello");
-    var i = a.indexOf("User-Agent: dank-dictionary/1.3.0");
+    var i = a.indexOf("User-Agent: dank-dictionary/" + releaseVersion);
     assert(i > -1, "UA header missing");
     eq(a[i - 1], "-H");
+  });
+  test("User-Agent follows injected manifest version", function () {
+    M.setPluginVersion("9.8.7");
+    assert(M.lookupArgs("hello").indexOf("User-Agent: dank-dictionary/9.8.7") > -1);
+    M.setPluginVersion(releaseVersion);
   });
   test("last arg is the URL with titles=<word>", function () {
     var url = M.lookupArgs("hello").slice(-1)[0];
@@ -262,11 +269,11 @@ group("parseResponse — Free Dictionary legacy", function () {
   });
   test("legacy not-found with title/message/resolution", function () {
     var r = M.parseResponse(JSON.stringify({ title: "Not Found", message: "No def", resolution: "Check spelling" }));
-    eq(r.ok, false); eq(r.kind, "notfound"); eq(r.error, "No def"); eq(r.hint, "Check spelling");
+    eq(r.ok, false); eq(r.kind, "notfound"); eq(r.error, "No def"); assert(!("hint" in r));
   });
   test("legacy not-found without resolution", function () {
     var r = M.parseResponse(JSON.stringify({ title: "Not Found", message: "No def" }));
-    eq(r.ok, false); eq(r.kind, "notfound"); eq(r.hint, "");
+    eq(r.ok, false); eq(r.kind, "notfound"); assert(!("hint" in r));
   });
 });
 
@@ -674,6 +681,19 @@ group("Wiktionary parser audit regressions", function () {
     eq(e.language, "es");
     eq(e.meanings[0].definitions[0].definition, "Un edificio para vivir.");
   });
+  test("colon-led senses survive metadata recognition", function () {
+    ["Source: the origin of something.", "Notes: musical tones."].forEach(function (sense) {
+      deepEq(M.wiktExtractDefs("term", sense).map(function (d) { return d.definition; }), [sense]);
+    });
+  });
+  test("year-comma senses survive without attribution cues", function () {
+    ["1837, an early locomotive design.", "2020, a leap year."].forEach(function (sense) {
+      deepEq(M.wiktExtractDefs("term", sense).map(function (d) { return d.definition; }), [sense]);
+    });
+  });
+  test("year-comma attributed quotations remain excluded", function () {
+    deepEq(M.wiktExtractDefs("term", "A genuine sense.\n1837, Dickens wrote:\nA quoted example.").map(function (d) { return d.definition; }), ["A genuine sense."]);
+  });
   test("year-led definition survives when it is not an attribution", function () {
     deepEq(M.wiktExtractDefs("year", "2020 is a leap year.").map(function (d) { return d.definition; }), ["2020 is a leap year."]);
   });
@@ -886,13 +906,13 @@ group("wiktExtractDefs — additional", function () {
     var d = M.wiktExtractDefs("x", "A real definition.\nHistory: blah");
     d.forEach(function (x) { assert(x.definition.indexOf("History:") === -1); });
   });
-  test("filters 'Notes' lines", function () {
+  test("preserves colon-led Notes senses", function () {
     var d = M.wiktExtractDefs("x", "A real definition.\nNotes: blah");
-    d.forEach(function (x) { assert(x.definition.indexOf("Notes:") === -1); });
+    deepEq(d.map(function (x) { return x.definition; }), ["A real definition.", "Notes: blah"]);
   });
-  test("filters 'Source' lines", function () {
+  test("preserves colon-led Source senses", function () {
     var d = M.wiktExtractDefs("x", "A real definition.\nSource: blah");
-    d.forEach(function (x) { assert(x.definition.indexOf("Source:") === -1); });
+    deepEq(d.map(function (x) { return x.definition; }), ["A real definition.", "Source: blah"]);
   });
   test("filters 'January 2020: ...' attribution", function () {
     var body = "A real definition.\nJanuary 2020: Some attribution text.";

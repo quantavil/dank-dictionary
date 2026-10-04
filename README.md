@@ -70,9 +70,9 @@ lookup status, query, and selected Wiktionary edition.
 
 ## Offline data and adapters
 
-The plugin bundles 108,181 headwords from Webster's New International Dictionary
+The plugin bundles headwords from Webster's New International Dictionary
 (1913), via GCIDE XML 0.53, in per-letter compressed files under `data/webster/`
-(about 6 MB). A lookup runs `gzip -dc` on the relevant bucket and parses its output.
+A lookup runs `gzip -dc` on the relevant bucket and parses its output.
 Generated buckets are never hand-edited.
 
 Sources are adapters in `Model.js`. Each provides its ID, label, languages,
@@ -106,13 +106,14 @@ See [the data license](data/webster/LICENSE-DATA.txt).
 bash tests/run.sh
 ```
 
-The suite runs **364 checks**: 2 QML source checks, 292 model checks, 24 registry/IPC
-runtime checks, 36 panel runtime checks, and 10 offline downloader checks.
+The suite runs **377 checks**: 2 QML source checks, 296 model checks, 24 registry/IPC
+runtime checks, 45 panel runtime checks, and 10 offline downloader checks.
 It requires Node.js, Quickshell, Python 3.11+, and GNU coreutils. Runtime tests
 use isolated offscreen windows, real Process/gzip/parsers, synthetic dictionary
 data, and stubs for DMS visual boundaries. They cover initial/reopened keyboard
 focus, divider geometry, cancellation, language-specific recovery, and command
-startup failures. Tests do not access the network or real Webster buckets.
+startup failures, both completion signal orders, and manifest version injection.
+Tests do not access the network or real Webster buckets.
 
 [The audit report](docs/audit.md) records the verified findings and their fixes.
 Offscreen tests do not establish physical multi-monitor or cross-compositor behavior.
