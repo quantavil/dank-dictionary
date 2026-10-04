@@ -15,8 +15,8 @@ bash tests/run.sh
 ```
 
 Suites: `lint.test.js` (2), `model.test.js` (296),
-`run-state-runtime.sh` (24), `run-panel-runtime.sh` (45),
-`build-webster.test.py` (10): 377 checks total.
+`run-state-runtime.sh` (24), `run-panel-runtime.sh` (50),
+`build-webster.test.py` (10): 382 checks total.
 All must be green before a push.
 
 - `Model.js` is QML-loaded JavaScript. **No `const`/`let`** — the engine
@@ -88,7 +88,7 @@ existing DMS IPC commands remain available.
 - `Panel.qml` receives `parentPopout` and `closePopout` from DMS. Enable
   `contentHandlesKeys` and use the inner DankTextField focus API.
 - Actual QML runtime checks run in `tests/run.sh`: `run-state-runtime.sh` (24)
-  and `run-panel-runtime.sh` (45).
+  and `run-panel-runtime.sh` (50).
   They run in a temporary offscreen Quickshell config, never in the live shell.
 
 ## Lookup correctness
@@ -114,6 +114,8 @@ existing DMS IPC commands remain available.
   FailedToStart is handled separately because it never emits started/exited.
 - Free Dictionary parsing is a tested compatibility path, not an active adapter.
   Retain its tests when changing normalization; no unused hint/UI variants state.
+- Bound language-menu height to the panel and align its right edge.
+  DMS hosts the dropdown list in a popup surface; retain native scrolling.
 - No unused debounce timer: Enter/Search submit directly.
 
 ## Building and publishing

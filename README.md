@@ -106,8 +106,8 @@ See [the data license](data/webster/LICENSE-DATA.txt).
 bash tests/run.sh
 ```
 
-The suite runs **377 checks**: 2 QML source checks, 296 model checks, 24 registry/IPC
-runtime checks, 45 panel runtime checks, and 10 offline downloader checks.
+The suite runs **382 checks**: 2 QML source checks, 296 model checks, 24 registry/IPC
+runtime checks, 50 panel runtime checks, and 10 offline downloader checks.
 It requires Node.js, Quickshell, Python 3.11+, and GNU coreutils. Runtime tests
 use isolated offscreen windows, real Process/gzip/parsers, synthetic dictionary
 data, and stubs for DMS visual boundaries. They cover initial/reopened keyboard

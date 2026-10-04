@@ -25,6 +25,14 @@ ShellRoot {
         }
         return null
     }
+    function findLanguageDropdown(item) {
+        if ("maxPopupHeight" in item && "options" in item) return item
+        for (var i = 0; i < item.children.length; i++) {
+            var found = findLanguageDropdown(item.children[i])
+            if (found) return found
+        }
+        return null
+    }
     function findSearchField(item) {
         if (typeof item.getActiveFocus === "function") return item
         for (var i = 0; i < item.children.length; i++) {
@@ -124,6 +132,12 @@ ShellRoot {
                     root.check(host.panelItem === panel, "loaded panel registered with host")
                     root.check(popup.contentHandlesKeys, "popup delegates keys to editor content")
                     root.check(panel.implicitHeight > 0, "popup content reports implicit height")
+                    var languageMenu = root.findLanguageDropdown(panel)
+                    root.check(languageMenu !== null, "language selector is reachable")
+                    root.check(languageMenu.alignPopupRight, "language menu aligns to selector right edge")
+                    root.check(languageMenu.maxPopupHeight > 0 && languageMenu.maxPopupHeight <= panel.height,
+                               "idle language menu fits short panel height")
+                    root.check(languageMenu.options.length === 23, "all languages remain available for scrolling")
                     panel.search("hello")
                     root.next()
                     break
@@ -134,6 +148,8 @@ ShellRoot {
                                "actual gzip collector and Webster adapter parse fixture")
                     root.check(panel.adapterQueue[1].argsFor("hello", "en").indexOf("User-Agent: dank-dictionary/9.8.7") >= 0,
                                "request version comes from synthetic manifest release")
+                    root.check(root.findLanguageDropdown(panel).maxPopupHeight <= panel.height,
+                               "language menu stays bounded when results resize panel")
                     var label = root.findPartOfSpeechLabel(panel, panel.entry.meanings[0].partOfSpeech)
                     root.check(label !== null, "part of speech header is rendered")
                     var divider = label.parent.children[1]

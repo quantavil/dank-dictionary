@@ -94,6 +94,8 @@ Item {
     property var options: []
     property string currentValue: ""
     property bool compactMode: true
+    property int maxPopupHeight: 400
+    property bool alignPopupRight: false
     property int dropdownWidth: 140
     signal valueChanged(string value)
     implicitWidth: dropdownWidth

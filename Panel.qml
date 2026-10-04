@@ -493,6 +493,11 @@ Item {
             }
             compactMode: true
             dropdownWidth: Theme.fontSizeMedium * 10
+            alignPopupRight: true
+            // DMS hosts this menu inside the popup window; short panels need
+            // a bounded scrolling list rather than the default 400px menu.
+            maxPopupHeight: Math.max(1, Math.min(Theme.fontSizeMedium * 20,
+                root.height - Theme.spacingS * 2))
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             onValueChanged: function(label) {
