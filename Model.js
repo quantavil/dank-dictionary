@@ -5,7 +5,7 @@
 // ---- Languages ----
 //
 // Data-driven list of supported target languages. Each entry carries a
-// BC-47-ish `value` (the dropdown's stored value), an English `label`
+// BCP 47 `value` (the dropdown's stored value), an English `label`
 // for the menu, and the native `wikiName` — the heading Wiktionary uses
 // for its own language section in that edition (e.g. "English" on
 // en.wikt, "ภาษาไทย" on th.wikt, "日本語" on ja.wikt). The native name is
@@ -13,33 +13,31 @@
 // difference between a clean parse and an empty meaning[] on the
 // first lookup.
 //
-// Languages are listed roughly by coverage depth; the dropdown sorts
-// them alphabetically by English label. The Free Dictionary per-language
-// API isn't currently exercised — see apiBase below.
+// The dropdown sorts editions alphabetically by English label.
 var LANGUAGES = [
-  { value: "ar", label: "Arabic",        wikiName: "Arabic" },
-  { value: "bn", label: "Bengali",       wikiName: "Bengali" },
-  { value: "zh", label: "Chinese",       wikiName: "Chinese" },
-  { value: "nl", label: "Dutch",         wikiName: "Dutch" },
+  { value: "ar", label: "Arabic",        wikiName: "العربية" },
+  { value: "bn", label: "Bengali",       wikiName: "বাংলা" },
+  { value: "zh", label: "Chinese",       wikiName: "漢語" },
+  { value: "nl", label: "Dutch",         wikiName: "Nederlands" },
   { value: "en", label: "English",       wikiName: "English" },
-  { value: "fr", label: "French",        wikiName: "French" },
-  { value: "de", label: "German",        wikiName: "German" },
-  { value: "hi", label: "Hindi",         wikiName: "Hindi" },
-  { value: "id", label: "Indonesian",    wikiName: "Indonesian" },
-  { value: "it", label: "Italian",       wikiName: "Italian" },
+  { value: "fr", label: "French",        wikiName: "Français" },
+  { value: "de", label: "German",        wikiName: "Deutsch" },
+  { value: "hi", label: "Hindi",         wikiName: "हिन्दी" },
+  { value: "id", label: "Indonesian",    wikiName: "Bahasa Indonesia" },
+  { value: "it", label: "Italian",       wikiName: "Italiano" },
   { value: "ja", label: "Japanese",      wikiName: "日本語" },
   { value: "ko", label: "Korean",        wikiName: "한국어" },
-  { value: "ms", label: "Malay",         wikiName: "Malay" },
-  { value: "fa", label: "Persian",       wikiName: "Persian" },
-  { value: "pl", label: "Polish",        wikiName: "Polish" },
-  { value: "pt", label: "Portuguese",    wikiName: "Portuguese" },
-  { value: "ru", label: "Russian",       wikiName: "Russian" },
-  { value: "es", label: "Spanish",       wikiName: "Spanish" },
-  { value: "sw", label: "Swahili",       wikiName: "Swahili" },
-  { value: "sv", label: "Swedish",       wikiName: "Swedish" },
+  { value: "ms", label: "Malay",         wikiName: "Bahasa Melayu" },
+  { value: "fa", label: "Persian",       wikiName: "فارسی" },
+  { value: "pl", label: "Polish",        wikiName: "język polski" },
+  { value: "pt", label: "Portuguese",    wikiName: "Português" },
+  { value: "ru", label: "Russian",       wikiName: "Русский" },
+  { value: "es", label: "Spanish",       wikiName: "Español" },
+  { value: "sw", label: "Swahili",       wikiName: "Kiswahili" },
+  { value: "sv", label: "Swedish",       wikiName: "Svenska" },
   { value: "th", label: "Thai",          wikiName: "ภาษาไทย" },
-  { value: "tr", label: "Turkish",       wikiName: "Turkish" },
-  { value: "vi", label: "Vietnamese",    wikiName: "Vietnamese" }
+  { value: "tr", label: "Turkish",       wikiName: "Türkçe" },
+  { value: "vi", label: "Vietnamese",    wikiName: "Tiếng Việt" }
 ].sort(function (a, b) { return a.label.localeCompare(b.label) })
 
 var LANG_BY_VALUE = {}
@@ -84,10 +82,23 @@ function lookupArgs(word, langCode) {
   var w = String(word || "").trim()
   if (w === "") return []
   return [
-    "curl", "-fsS", "--max-time", "5",
-    "-H", "User-Agent: dank-dictionary" + (pluginVersion ? "/" + pluginVersion : ""),
+    "curl", "-fsS", "--max-time", "5", "--proto", "=https",
+    "--max-filesize", "2097152",
+    "-H", "User-Agent: dank-dictionary" + (pluginVersion ? "/" + pluginVersion : "") + " (https://github.com/quantavil/dank-dictionary)",
     apiBase(langCode) + encodeURIComponent(w)
   ]
+}
+
+// Exact spelling wins; case-sensitive editions can then resolve common variants.
+function titleVariants(word) {
+  var exact = String(word || "").trim()
+  var lower = exact.toLowerCase()
+  var capital = lower.charAt(0).toUpperCase() + lower.slice(1)
+  var out = []
+  ;[exact, lower, capital].forEach(function(value) {
+    if (value && out.indexOf(value) < 0) out.push(value)
+  })
+  return out
 }
 
 // ---- Response parsing & normalisation ----
@@ -96,7 +107,7 @@ function lookupArgs(word, langCode) {
 // canonical { word, phonetic, audioUrl, source, language, meanings } shape.
 // The Wiktionary branch delegates the heavy lifting to the extract parser
 // below; the Free Dictionary branch normalises in place.
-function parseResponse(raw, langCode) {
+function parseResponse(raw, langCode, word) {
   var text = String(raw || "").trim()
   if (text === "") {
     return { ok: false, kind: "empty", error: "empty response" }
@@ -111,6 +122,8 @@ function parseResponse(raw, langCode) {
     return { ok: false, kind: "invalid", error: "could not parse response" }
   }
 
+  if (data.error) return { ok: false, kind: "network", error: "Wiktionary is unavailable. Try again later." }
+
   // Wiktionary envelope: { query: { pages: { "<id>": { ... } } } }
   if (data.query && data.query.pages && typeof data.query.pages === "object") {
     var pages = data.query.pages
@@ -118,25 +131,33 @@ function parseResponse(raw, langCode) {
     if (pageIds.length === 0) {
       return { ok: false, kind: "empty", error: "no entry returned" }
     }
-    var page = pages[pageIds[0]]
-    if (!page || page.missing !== undefined) {
-      return {
-        ok: false,
-        kind: "notfound",
-        error: "no entry for \"" + (page && page.title ? page.title : "word") + "\""
+    var ordered = []
+    var variants = titleVariants(word)
+    for (var v = 0; v < variants.length; v++) {
+      for (var i = 0; i < pageIds.length; i++) {
+        var candidate = pages[pageIds[i]]
+        if (candidate && candidate.title === variants[v] && ordered.indexOf(candidate) < 0)
+          ordered.push(candidate)
       }
     }
-    var extract = page.extract != null ? String(page.extract).trim() : ""
-    if (extract === "") {
-      return { ok: false, kind: "empty", error: "no extract returned" }
+    for (var i = 0; i < pageIds.length; i++) {
+      var candidate = pages[pageIds[i]]
+      if (ordered.indexOf(candidate) < 0) ordered.push(candidate)
     }
-    var entry = normalizeEntry(page, langCode)
-    if (!entry) return { ok: false, kind: "empty", error: "no entry returned" }
-    return { ok: true, entry: entry, variants: pageIds.length }
+    var present = false
+    for (var i = 0; i < ordered.length; i++) {
+      var page = ordered[i]
+      if (!page || page.missing !== undefined) continue
+      present = true
+      var entry = normalizeEntry(page, langCode)
+      if (entry) return { ok: true, entry: entry, variants: pageIds.length }
+    }
+    return { ok: false, kind: present ? "empty" : "notfound", error: present
+      ? "No usable definitions returned by Wiktionary."
+      : "no entry for \"" + String(word || "word") + "\"" }
   }
 
-  // Free Dictionary legacy shapes — preserved so rollback is a one-line
-  // change. The legacy Free Dictionary used a top-level JSON array of
+  // Tested Free Dictionary compatibility shapes use a top-level array of
   // entries with `title`/`message` for not-found responses.
   if (!Array.isArray(data) && data.title && data.message) {
     return {
@@ -170,9 +191,9 @@ function normalizeEntry(raw, langCode) {
 
   // Wiktionary branch.
   if (raw.extract != null) {
-    var word = String(raw.title || "").trim()
-    if (word === "") return null
-    return parseWiktionaryWikitext(word, raw.extract, langCode)
+    var title = String(raw.title || "").trim()
+    if (title === "") return null
+    return parseWiktionaryWikitext(title, raw.extract, langCode)
   }
 
   // Free Dictionary branch.
@@ -288,11 +309,11 @@ function stringList(value) {
 
 function parseSections(text) {
   text = String(text || "").replace(/\r\n/g, "\n").replace(/^\uFEFF/, "")
-  var root = { level: 1, title: "", body: "", children: [] }
+  var root = { level: 0, title: "", body: "", children: [] }
   var stack = [root]
   var lines = text.split("\n")
   for (var i = 0; i < lines.length; i++) {
-    var m = /^(={2,5})\s*([^{}=\n][^{}=\n]*?)\s*\1\s*$/.exec(lines[i])
+    var m = /^(={1,6})\s*([^{}=\n][^{}=\n]*?)\s*\1\s*$/.exec(lines[i])
     if (m) {
       var lvl = m[1].length
       while (stack.length > 1 && stack[stack.length - 1].level >= lvl) stack.pop()
@@ -343,9 +364,9 @@ function wiktCanonicalPos(t) {
 }
 
 function wiktExtractIpa(body) {
-  var m = /IPA[^:\n]*:\s*\/([^\n/]+)\//.exec(body)
+  var m = /(?:IPA|МФА)[^:\n]*:\s*\/([^\n/]+)\//.exec(body)
   if (m) return "/" + m[1] + "/"
-  var m2 = /IPA[^:\n]*:\s*\[([^\n\]]+)\]/.exec(body)
+  var m2 = /(?:IPA|МФА)[^:\n]*:\s*\[([^\n\]]+)\]/.exec(body)
   if (m2) return "[" + m2[1] + "]"
   return ""
 }
@@ -359,7 +380,7 @@ function wiktIsInflectionLine(line, headword) {
   var annot = line.substring(openIdx + 1, closeIdx)
   if (!head || !annot) return false
   var heads = head.split(/[,\s]+/).filter(Boolean)
-  if (!heads.length) return null
+  if (!heads.length) return false
   var hw = String(headword || "").trim().toLowerCase()
   var headOK = true
   for (var i = 0; head !== hw && i < heads.length; i++) {
@@ -444,7 +465,31 @@ function wiktExtractDefs(headword, body) {
 }
 
 // Known native headings in addition to each language's canonical wikiName.
-var WIKT_LANGUAGE_ALIASES = { fr: ["français"], th: ["ไทย"], de: ["deutsch"], es: ["español"] }
+var WIKT_LANGUAGE_ALIASES = { zh: ["汉语", "中文"], hi: ["हिंदी"], th: ["ไทย"], fr: ["français"], de: ["deutsch"], es: ["español"] }
+
+// Native structural headings observed in extracts from the supported editions.
+// Etymology containers recurse; pronunciation and auxiliary sections never become POS.
+var WIKT_STRUCTURE = {
+  etymology: ["etymology", "étymologie", "etimologia", "etimologia / derivazione", "etimología", "etymologie", "woordherkomst en -opbouw", "этимология", "семантические свойства", "รากศัพท์", "語源", "字源", "詞源", "词源", "etimologi", "köken", "từ nguyên", "ریشه لغت", "ریشه‌شناسی", "व्युत्पत्ति"],
+  pronunciation: ["pronunciation", "prononciation", "pronuncia", "pronúncia", "uitspraak", "произношение", "การออกเสียง", "発音", "發音", "发音", "讀音", "读音", "উচ্চারণ", "sebutan", "söyleniş", "cách phát âm", "آوایش", "उच्चारण", "النطق"],
+  skip: ["traductions", "traducciones", "traduzione", "tradução", "vertalingen", "übersetzungen", "перевод", "terjemahan", "tafsiri", "översättningar", "çeviriler", "dịch", "คำแปลภาษาอื่น", "翻译", "翻譯", "برگردان‌ها", "অনুবাদসমূহ", "anagrammes", "anagramas", "voir aussi", "véase también", "ver também", "références", "referências", "kaynakça", "tham khảo", "библиография", "морфологические и синтаксические свойства", "родственные слова", "синонимы", "антонимы", "гиперонимы", "гипонимы", "anagramme", "aussprache", "silbentrennung", "sillabazione", "synoniemen", "synonymes", "sinonimi", "sinônimos", "คำพ้องความ", "ดูเพิ่ม", "รูปแบบอื่น", "tulisan jawi", "tesaurus", "từ tương tự", "chữ nôm", "woordafbreking", "gangbaarheid", "meer informatie", "verwijzingen", "관련 표현", "관련 어휘", "熟語", "成句", "सम्बन्धित शब्द", "parole derivate", "alterati", "proverbi e modi di dire", "terbitan", "ligações externas", "información adicional", "пословицы и поговорки", "анаграммы"]
+}
+
+function wiktStructure(key) {
+  for (var kind in WIKT_STRUCTURE)
+    if (WIKT_STRUCTURE[kind].indexOf(key) >= 0) return kind
+  return ""
+}
+
+// German and Polish extracts use body labels rather than definition subsections.
+function wiktLocalizedDefs(headword, body, edition) {
+  var text = String(body || "")
+  if (edition === "de" && /(?:^|\n)Bedeutungen:\s*\n/.test(text)) {
+    text = text.split(/(?:^|\n)Bedeutungen:\s*\n/)[1].split(/\n[^\n\[\]]+:\s*(?:\n|$)/)[0]
+    text = text.replace(/^\[\d+[a-z]?\]\s*/gm, "")
+  }
+  return wiktExtractDefs(headword, text)
+}
 
 function parseWiktionaryWikitext(headword, rawText, langCode) {
   var top = parseSections(rawText)
@@ -458,9 +503,10 @@ function parseWiktionaryWikitext(headword, rawText, langCode) {
   var labelLower = langLabel(target).toLowerCase()
   var aliases = WIKT_LANGUAGE_ALIASES[target] || []
   var lang = null
+  var languageLevel = top.some(function(node) { return node.level === 1 }) ? 1 : 2
   for (var i = 0; i < top.length; i++) {
     var t = top[i]
-    if (t.level !== 2) continue
+    if (t.level !== languageLevel) continue
     var titleLower = t.title.toLowerCase()
     var decorated = /\(([^()]+)\)\s*$/.exec(titleLower)
     var headingLanguage = decorated ? decorated[1].trim() : titleLower
@@ -471,7 +517,7 @@ function parseWiktionaryWikitext(headword, rawText, langCode) {
   }
   if (!lang) {
     for (var i = 0; i < top.length; i++) {
-      if (top[i].level === 2) { lang = top[i]; break }
+      if (top[i].level === languageLevel) { lang = top[i]; break }
     }
   }
   if (!lang) return null
@@ -487,16 +533,17 @@ function parseWiktionaryWikitext(headword, rawText, langCode) {
 
   function visit(node) {
     var key = node.title.toLowerCase().trim()
-    var keyBase = key.replace(/\s+\d+$/, "")
-    if (key === "pronunciation") {
-      phonetic = wiktExtractIpa(node.body) || phonetic
+    var keyBase = key.replace(/\s*[0-9۰-۹]+$/, "").trim()
+    var structure = wiktStructure(keyBase)
+    if (structure === "pronunciation") {
+      phonetic = phonetic || wiktExtractIpa(node.body)
       return
     }
-    if (key === "etymology" || keyBase === "etymology") {
+    if (structure === "etymology") {
       for (var i = 0; i < node.children.length; i++) visit(node.children[i])
       return
     }
-    if (WIKT_SKIP_DROP[key]) return
+    if (WIKT_SKIP_DROP[keyBase] || structure === "skip") return
     if (WIKT_POS_KEYS[key]) {
       var defs = wiktExtractDefs(headword, node.body)
       if (defs.length) {
@@ -509,8 +556,9 @@ function parseWiktionaryWikitext(headword, rawText, langCode) {
       }
       return
     }
-    if (loose && node.level >= 3) {
-      var looseDefs = wiktExtractDefs(headword, node.body)
+    if (loose && node.level > lang.level) {
+      phonetic = phonetic || wiktExtractIpa(node.body)
+      var looseDefs = wiktLocalizedDefs(headword, node.body, target)
       if (looseDefs.length && node.title.trim().length > 0 && node.title.trim().length < 30) {
         meanings.push({
           partOfSpeech: node.title.trim(),
@@ -524,6 +572,21 @@ function parseWiktionaryWikitext(headword, rawText, langCode) {
     for (var i = 0; i < node.children.length; i++) visit(node.children[i])
   }
 
+  if (target === "pl") {
+    var senses = /(?:^|\n)znaczenia:\s*\n([\s\S]*?)(?=\n[^\n]+:\s*(?:\n|$)|$)/.exec(lang.body)
+    if (senses) {
+      var lines = senses[1].trim().split("\n").filter(function(line) { return line.trim() !== "" })
+      var label = lines.length && !/^\(\d/.test(lines[0]) ? lines.shift() : "znaczenia"
+      var definitions = wiktExtractDefs(headword, lines.filter(function(line) { return /^\(\d+\.\d+\)/.test(line) }).join("\n").replace(/^\(\d+\.\d+\)\s*/gm, ""))
+      if (definitions.length) meanings.push({ partOfSpeech: label, definitions: definitions, synonyms: [], antonyms: [] })
+      phonetic = wiktExtractIpa(lang.body)
+    }
+  }
+  if (target === "id" && !lang.children.length) {
+    var blocks = lang.body.trim().split(/\n\s*\n/)
+    var definitions = wiktExtractDefs(headword, blocks.length > 1 ? blocks[1] : "")
+    if (definitions.length) meanings.push({ partOfSpeech: "", definitions: definitions, synonyms: [], antonyms: [] })
+  }
   for (var i = 0; i < lang.children.length; i++) visit(lang.children[i])
 
   if (!meanings.length) return null
@@ -548,7 +611,7 @@ function summaryLabel(entry) {
   var pos = []
   for (var i = 0; i < entry.meanings.length; i++) {
     if (entry.meanings[i] && entry.meanings[i].partOfSpeech) {
-      pos.push(entry.meanings[i].partOfSpeech)
+      if (pos.indexOf(entry.meanings[i].partOfSpeech) < 0) pos.push(entry.meanings[i].partOfSpeech)
     }
   }
   return pos.join(" · ")
@@ -566,18 +629,9 @@ function sourceLabel(entry) {
 
 // ---- Fuzzy match ----
 //
-// The Free Dictionary API returns 404 for anything not exactly in its index,
-// so a misspelled query gets nothing. We compile a local wordlist (Google
-// 10K, lowercase, deduped) and compute Levenshtein distance against the
-// input to surface "did you mean?" candidates.
-//
-// Sizing notes:
-//   - 10K words × ~5 letters each → ~50ms for an exhaustive scan on first
-//     run in the QML engine. Subsequent runs hit the same hot path. If this
-//     shows up in a profile the obvious prefilter is the first-letter and
-//     length-difference checks below.
-//   - We only emit candidates within edit distance 2 of the input; the
-//     normalized score (distance / max length) is what decides confidence.
+// English candidates come from the successfully decoded Webster bucket.
+// This keeps suggestions in the bundled dictionary and includes rare headwords.
+// Adjacent transpositions count as one edit; ambiguous candidates remain choices.
 //
 // Return shape:
 //   { autoMatch: "hello", alternatives: [] }           — single clear winner
@@ -618,9 +672,24 @@ function levenshtein(a, b) {
 }
 
 
-// English wordlist for fuzzy matching. Loaded from the standalone wordlist.js
-// file and injected via setWordlist() at panel init time. The list is not
-// inlined here to keep this file focused on logic.
+// Restricted Damerau-Levenshtein (optimal string alignment) distance.
+function damerauLevenshtein(a, b) {
+  var rows = [[], [], []]
+  for (var j = 0; j <= b.length; j++) rows[0][j] = j
+  for (var i = 1; i <= a.length; i++) {
+    var current = rows[i % 3], previous = rows[(i - 1) % 3], earlier = rows[(i + 1) % 3]
+    current[0] = i
+    for (var j = 1; j <= b.length; j++) {
+      var cost = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1
+      current[j] = Math.min(current[j - 1] + 1, previous[j] + 1, previous[j - 1] + cost)
+      if (i > 1 && j > 1 && a.charAt(i - 1) === b.charAt(j - 2) && a.charAt(i - 2) === b.charAt(j - 1))
+        current[j] = Math.min(current[j], earlier[j - 2] + 1)
+    }
+  }
+  return rows[a.length % 3][b.length]
+}
+
+// Per-panel candidates, refreshed when the offline adapter parses a bucket.
 var _WORDLIST = []
 
 function setWordlist(list) {
@@ -658,7 +727,7 @@ function fuzzyMatch(rawQuery) {
     // the score below penalizes large gaps all the same.
     if (w.charAt(0) !== q.charAt(0)) continue
     if (Math.abs(wlen - qlen) > ALTERNATIVES_DISTANCE_LIMIT) continue
-    var d = levenshtein(q, w)
+    var d = damerauLevenshtein(q, w)
     if (d > ALTERNATIVES_DISTANCE_LIMIT) continue
     // Normalized score: 0 = identical, larger = worse. The longest-side
     // length is the denom so a 1-edit typo on a 12-letter word scores
@@ -755,6 +824,11 @@ function websterBucket(key) {
 function websterCanonicalPos(raw) {
   var p = String(raw || "").trim().toLowerCase().replace(/\./g, " ").replace(/\s+/g, " ").trim()
   if (p === "") return ""
+  if (p === "v t") return "transitive verb"
+  if (p === "v i") return "intransitive verb"
+  if (p === "p p") return "past participle"
+  if (p === "n pl") return "plural noun"
+  if (p === "p pr") return "present participle"
   if (p === "n" || p === "prop n" || p === "proper n") return "noun"
   if (p === "a") return "adjective"
   if (p === "adv") return "adverb"
@@ -785,8 +859,9 @@ function parseWebsterJson(stdout, word) {
   if (!data || typeof data !== "object") {
     return { ok: false, kind: "invalid", error: "could not parse dictionary data" }
   }
+  setWordlist(Object.keys(data).filter(function(candidate) { return /^[a-z]{2,30}$/.test(candidate) }))
   var key = websterKey(word)
-  var raw = data[key]
+  var raw = Object.prototype.hasOwnProperty.call(data, key) ? data[key] : null
   if (!raw || typeof raw !== "object") {
     return { ok: false, kind: "notfound", error: "no entry for \"" + String(word || "").trim() + "\"" }
   }
@@ -845,11 +920,12 @@ var ADAPTER_WIKTIONARY = {
   id: "wiktionary",
   label: "Wiktionary",
   languages: ["*"],
+  wordsFor: function (word, lang) { return titleVariants(word) },
   argsFor: function (word, lang) {
     return lookupArgs(word, lang)
   },
   parse: function (stdout, word, lang) {
-    return parseResponse(stdout, lang)
+    return parseResponse(stdout, lang, word)
   }
 }
 

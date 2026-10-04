@@ -24,7 +24,6 @@ GPL — a license notice is written into data/webster/ by this script.
 import argparse
 import gzip
 import hashlib
-import html
 import json
 import os
 import re
@@ -134,7 +133,7 @@ def text_of(el):
 
 
 def clean(s):
-    return html.unescape(re.sub(r"\s+", " ", s or "").strip())
+    return re.sub(r"\s+", " ", s or "").strip()
 
 
 def norm_key(hw):
@@ -174,15 +173,17 @@ def parse_letter(zf, name, entities):
 
     def add_group(pos, pr, defs):
         nonlocal last_pos
-        if cur is None or not defs:
+        if cur is None:
+            return
+        if pr and not cur["pr"]:
+            cur["pr"] = clean(pr)
+        if not defs:
             return
         pos = clean(pos).rstrip(".")
         if not pos:
             pos = last_pos  # continuation block: inherit the entry's last pos
         if not pos:
             pos = ""  # entries that never declare a pos (letters, prefixes)
-        if pr and not cur["pr"]:
-            cur["pr"] = clean(pr)
         grp = None
         for g in cur["pos"]:
             if g[0].lower() == pos.lower():
@@ -253,7 +254,7 @@ def main():
     for b in sorted(buckets):
         raw = json.dumps(buckets[b], ensure_ascii=False,
                          separators=(",", ":")).encode("utf-8")
-        gz = gzip.compress(raw, compresslevel=9)
+        gz = gzip.compress(raw, compresslevel=9, mtime=0)
         path = os.path.join(args.out, b + ".json.gz")
         with open(path, "wb") as f:
             f.write(gz)

@@ -14,9 +14,9 @@ generated; do not hand-edit them.
 bash tests/run.sh
 ```
 
-Suites: `lint.test.js` (2), `model.test.js` (296),
-`run-state-runtime.sh` (24), `run-panel-runtime.sh` (50),
-`build-webster.test.py` (10): 382 checks total.
+Suites: `lint.test.js` (2), `model.test.js` (312),
+`run-state-runtime.sh` (24), `run-panel-runtime.sh` (68),
+`build-webster.test.py` (13): 419 checks total.
 All must be green before a push.
 
 - `Model.js` is QML-loaded JavaScript. **No `const`/`let`** — the engine
@@ -38,6 +38,7 @@ plain object:
 ```
 { id, label, languages: ["en"],            // "*" = every language
   argsFor: function(word, lang) -> argv,   // [] = skip this adapter
+  wordsFor: function(word, lang) -> words, // optional, exact then case variants
   parse:   function(stdout, word, lang) -> { ok:true, entry } | { ok:false, kind, error } }
 ```
 
@@ -45,8 +46,10 @@ plain object:
   to `[webster1913, wiktionary]` (offline-first, network fallback); every
   other language to `[wiktionary]` via `adaptersFor(lang)`.
 - The panel tries the chain in order: first `ok` wins; `notfound`/`empty`/
-  `invalid`/process-failure advances; an exhausted chain falls back to the
-  existing fuzzy-recovery / notfound UI.
+  `invalid`/process-failure advances; an exhausted chain uses typo recovery only for definitive misses.
+  Any unavailable/invalid source produces an error rather than correction.
+- Retry case variants only after a definitive miss. Source failures must produce
+  error status, never typo recovery; preserve exit code through EOF/exit joining.
 - Adding a source = new adapter object + one line in `ADAPTERS`. Do not
   reorder the registry and do not add per-language ad-hoc branches in
   `Panel.qml`.
@@ -55,9 +58,10 @@ plain object:
 
 `scripts/build-webster.py` produces `data/webster/<first-letter>.json.gz`
 (plus `other.json.gz` for keys not starting a-z) from GCIDE XML. Keys are
-normalized lowercased/collapsed-whitespace. A bucket decompresses to up to
-~1 MB, so the panel streams it through a `gzip -dc` Process and parses
-stdout — never read a bucket whole into memory.
+normalized lowercased/collapsed-whitespace. A bucket decompresses to roughly 2.2 MB at most in the current build. The panel
+uses `gzip -dc` and StdioCollector, then buffers/parses that bucket in memory;
+it never decompresses the entire dictionary at once. English fuzzy candidates
+come from that bucket’s keys, not an unrelated frequency list.
 
 Known issue: ~12.6% of headwords carry literal U+FFFD in their phonetic
 field (upstream GCIDE data loss, not a build-script bug — the build decodes
@@ -88,7 +92,7 @@ existing DMS IPC commands remain available.
 - `Panel.qml` receives `parentPopout` and `closePopout` from DMS. Enable
   `contentHandlesKeys` and use the inner DankTextField focus API.
 - Actual QML runtime checks run in `tests/run.sh`: `run-state-runtime.sh` (24)
-  and `run-panel-runtime.sh` (50).
+  and `run-panel-runtime.sh` (68).
   They run in a temporary offscreen Quickshell config, never in the live shell.
 
 ## Lookup correctness
@@ -116,6 +120,8 @@ existing DMS IPC commands remain available.
   Retain its tests when changing normalization; no unused hint/UI variants state.
 - Bound language-menu height to the panel and align its right edge.
   DMS hosts the dropdown list in a popup surface; retain native scrolling.
+- Preserve the query when switching editions and rerun it. Use native DankScrollbar;
+  PageUp/PageDown scroll results and read-only definitions support selection/copy.
 - No unused debounce timer: Enter/Search submit directly.
 
 ## Building and publishing
@@ -129,3 +135,8 @@ existing DMS IPC commands remain available.
 - Preserve the original MIT copyright and the separate GCIDE data license.
 - Run the full suite and validate `plugin.json` against the target DMS schema
   before committing/pushing. Check live QML after a restart when reload caches it.
+
+The separate `python3 tests/data-smoke.py` check reads shipped buckets without
+network access or rebuilding. CI runs it and the pure model/build checks;
+Quickshell runtime checks remain required locally. Builds use gzip `mtime=0`;
+header-only pronunciation is retained and XML entities are decoded once.

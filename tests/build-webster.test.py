@@ -3,6 +3,9 @@
 import hashlib
 import importlib.util
 import io
+import zipfile
+import gzip
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -139,6 +142,42 @@ class ArchiveDownloadTests(unittest.TestCase):
                 builder.ensure_zip(str(self.cache))
         self.assertEqual(self.cache.read_bytes(), self.payload)
         self.assert_no_partial_files()
+
+
+class BuilderTests(unittest.TestCase):
+    def test_pronunciation_in_header_survives_definition_continuation(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("gcide_xml-0.53/gcide_a.xml",
+                '<p><ent>Abase</ent><pr>(abase)</pr><pos>v. t.</pos></p>'
+                '<p><def>To lower.</def></p>')
+        with zipfile.ZipFile(archive) as z:
+            entry = dict(builder.parse_letter(z, "gcide_a.xml", ""))["abase"]
+        self.assertEqual(entry["pr"], "(abase)")
+        self.assertEqual(entry["pos"], [["v. t", ["To lower."]]])
+
+    def test_xml_entities_are_decoded_once(self):
+        self.assertEqual(builder.clean("Literal &amp; and &lt;tag&gt;"),
+                         "Literal &amp; and &lt;tag&gt;")
+
+    def test_build_is_reproducible_even_on_python_with_timestamp_default(self):
+        original_compress = gzip.compress
+        def historical_compress(raw, compresslevel=9, **kwargs):
+            return original_compress(raw, compresslevel=compresslevel,
+                                     mtime=kwargs.get("mtime", int(builder.time.time())))
+        with tempfile.TemporaryDirectory() as d:
+            with patch.object(builder, "ensure_zip"), patch.object(builder, "log"), \
+                 patch.object(builder.zipfile, "ZipFile"), \
+                 patch.object(builder, "load_entities", return_value=""), \
+                 patch.object(builder, "parse_letter", return_value=[("apple", {"w":"Apple", "pr":"(apple)", "pos":[["n",["A fruit."]]]})]), \
+                 patch.object(builder.gzip, "compress", side_effect=historical_compress):
+                with patch.object(builder.sys, "argv", ["build", "--out", d]), patch.object(builder.time, "time", return_value=100):
+                    builder.main()
+                before = (Path(d)/"a.json.gz").read_bytes()
+                with patch.object(builder.sys, "argv", ["build", "--out", d]), patch.object(builder.time, "time", return_value=200):
+                    builder.main()
+                self.assertEqual(before, (Path(d)/"a.json.gz").read_bytes())
+                self.assertEqual(before[4:8], b"\0" * 4)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ trap 'rm -rf -- "$test_root"' EXIT
 mkdir -p "$test_root/tests" "$test_root/Common" "$test_root/Widgets" \
     "$test_root/data/webster" "$test_root/bin"
 cp "$test_dir/../Panel.qml" "$test_dir/../Model.js" \
-    "$test_dir/../plugin.json" "$test_dir/../wordlist.js" "$test_dir/../DictionaryState.qml" "$test_root/"
+    "$test_dir/../plugin.json" "$test_dir/../DictionaryState.qml" "$test_root/"
 rg '^singleton DictionaryState |^Panel ' "$test_dir/../qmldir" > "$test_root/qmldir"
 cp "$test_dir/panel-runtime.qml" "$test_root/tests/PanelRuntime.qml"
 # A synthetic release proves Panel reads the manifest rather than a code literal.
@@ -53,6 +53,7 @@ DankTextField 1.0 DankTextField.qml
 DankButton 1.0 DankButton.qml
 DankDropdown 1.0 DankDropdown.qml
 DankIcon 1.0 DankIcon.qml
+DankScrollbar 1.0 DankScrollbar.qml
 QML
 cat > "$test_root/Widgets/DankTextField.qml" <<'QML'
 import QtQuick
@@ -112,12 +113,17 @@ Item {
     implicitHeight: size
 }
 QML
+cat > "$test_root/Widgets/DankScrollbar.qml" <<'QML'
+import QtQuick.Controls
+ScrollBar { property var targetFlickable: null }
+QML
 # No network access: curl returns a controlled miss, delayed for cancellation tests.
 cat > "$test_root/bin/curl" <<'BASH_CURL'
 #!/usr/bin/env bash
 for arg in "$@"; do
     case "$arg" in
         *titles=slow*) sleep 0.5 ;;
+        *titles=outage*) exit 28 ;;
     esac
 done
 printf '%s\n' '{"query":{"pages":{"-1":{"title":"fixture miss","missing":""}}}}'
@@ -133,6 +139,9 @@ for bucket in "abcdefghijklmnopqrstuvwxyz":
     payload = {}
     if bucket == "h":
         payload["hello"] = {"w": "hello", "pr": "", "pos": [["interj.", ["A greeting."]]]}
+    elif bucket == "d":
+        # A stale candidate exercises failed recovery without network definitions.
+        payload["dictionary"] = None
     elif bucket == "w":
         payload["world"] = {"w": "world", "pr": "", "pos": [["n.", ["The earth."]]]}
     with gzip.open(root / (bucket + ".json.gz"), "wt", encoding="utf-8") as output:
@@ -150,3 +159,22 @@ if ! rg -q 'PANEL_RUNTIME_PASS [0-9]+ checks' "$test_log" \
     exit 1
 fi
 rg 'PANEL_RUNTIME_PASS' "$test_log"
+
+# Corrupt release metadata must not prevent host registration or offline lookup.
+cp "$test_dir/manifest-runtime.qml" "$test_root/tests/ManifestRuntime.qml"
+printf '{broken' > "$test_root/plugin.json"
+cat > "$test_root/shell.qml" <<'QML'
+import "tests"
+ManifestRuntime {}
+QML
+if ! timeout 10s env QT_QPA_PLATFORM=offscreen PATH="$test_root/bin:$PATH" \
+    quickshell --no-color -p "$test_root/shell.qml" >"$test_log" 2>&1; then
+    cat "$test_log"
+    exit 1
+fi
+if ! rg -q 'MANIFEST_RUNTIME_PASS 2 checks' "$test_log" \
+    || rg -q 'MANIFEST_RUNTIME_FAIL|ReferenceError|TypeError|Binding loop|Cannot assign|Unable to assign|Cannot read property' "$test_log"; then
+    cat "$test_log"
+    exit 1
+fi
+rg 'MANIFEST_RUNTIME_PASS' "$test_log"

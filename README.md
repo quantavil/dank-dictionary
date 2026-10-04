@@ -43,14 +43,20 @@ old behavior.
 
 Click the dictionary icon: the search field receives keyboard focus so you
 can type immediately. Enter a word and press **Enter** or **Search**. The
-language dropdown selects the Wiktionary edition and clears the previous lookup.
+language dropdown selects the Wiktionary edition (language of definitions) and
+reruns the current word.
 Press **Escape** to clear the focused field, then again to close the popup.
 
 English misses may auto-correct a close typo or show clickable suggestions.
-Other languages never receive suggestions from the English wordlist. A failed
+Suggestions use keys from the loaded Webster bucket; other editions never
+receive English suggestions. Network failures show an error and do not trigger
+automatic spelling correction. A failed
 automatic correction reports the word you originally typed. Editing the query
 or closing the popup cancels pending lookups so stale results cannot replace
 newer ones.
+
+Use **PageUp/PageDown** to scroll long entries. Definitions support mouse
+selection and **Ctrl+C**. Wiktionary retries case variants after an exact miss.
 
 The plugin does not install scripts or create keyboard shortcuts.
 
@@ -71,7 +77,7 @@ lookup status, query, and selected Wiktionary edition.
 ## Offline data and adapters
 
 The plugin bundles headwords from Webster's New International Dictionary
-(1913), via GCIDE XML 0.53, in per-letter compressed files under `data/webster/`
+(1913), via GCIDE XML 0.53, in per-letter compressed files under `data/webster/`.
 A lookup runs `gzip -dc` on the relevant bucket and parses its output.
 Generated buckets are never hand-edited.
 
@@ -106,14 +112,17 @@ See [the data license](data/webster/LICENSE-DATA.txt).
 bash tests/run.sh
 ```
 
-The suite runs **382 checks**: 2 QML source checks, 296 model checks, 24 registry/IPC
-runtime checks, 50 panel runtime checks, and 10 offline downloader checks.
+The suite runs **419 checks**: 2 QML source checks, 312 model checks, 24 registry/IPC
+runtime checks, 68 panel/startup checks, and 13 offline build/downloader checks.
 It requires Node.js, Quickshell, Python 3.11+, and GNU coreutils. Runtime tests
 use isolated offscreen windows, real Process/gzip/parsers, synthetic dictionary
 data, and stubs for DMS visual boundaries. They cover initial/reopened keyboard
 focus, divider geometry, cancellation, language-specific recovery, and command
 startup failures, both completion signal orders, and manifest version injection.
-Tests do not access the network or real Webster buckets.
+The main suite does not access the network or real Webster buckets.
+Run `python3 tests/data-smoke.py` separately to check the shipped buckets,
+known headwords, and retained pronunciations. CI runs the pure checks and this
+data smoke check; actual Quickshell runtime suites are required locally.
 
 [The audit report](docs/audit.md) records the verified findings and their fixes.
 Offscreen tests do not establish physical multi-monitor or cross-compositor behavior.

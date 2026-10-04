@@ -33,10 +33,10 @@ var stripped = src
 // We need to add explicit export lines so Node can reach them.
 var PUBLIC_SYMBOLS = [
   "LANGUAGES","LANG_BY_VALUE","langLabel","langWikiName","defaultLanguage","languages",
-  "apiBase","setPluginVersion","lookupArgs","parseResponse","normalizeEntry","normalizeMeaning","normalizeDefinition","stringList",
+  "titleVariants","wiktStructure","wiktLocalizedDefs","apiBase","setPluginVersion","lookupArgs","parseResponse","normalizeEntry","normalizeMeaning","normalizeDefinition","stringList",
   "parseSections","stripInlineHeaders","WIKT_POS_KEYS","WIKT_SKIP_DROP","WIKT_LANGUAGE_ALIASES",
   "wiktCanonicalPos","wiktExtractIpa","wiktIsInflectionLine","wiktExtractDefs",
-  "parseWiktionaryWikitext","summaryLabel","sourceLabel","levenshtein","fuzzyMatch","setWordlist",
+  "parseWiktionaryWikitext","summaryLabel","sourceLabel","damerauLevenshtein","levenshtein","fuzzyMatch","setWordlist",
   "setDataDir","websterKey","websterBucket","websterCanonicalPos","parseWebsterJson",
   "ADAPTER_WEBSTER","ADAPTER_WIKTIONARY","ADAPTERS","adaptersFor"
 ];
@@ -191,13 +191,13 @@ group("lookupArgs", function () {
   test("includes -H User-Agent", function () {
     M.setPluginVersion(releaseVersion);
     var a = M.lookupArgs("hello");
-    var i = a.indexOf("User-Agent: dank-dictionary/" + releaseVersion);
+    var i = a.indexOf("User-Agent: dank-dictionary/" + releaseVersion + " (https://github.com/quantavil/dank-dictionary)");
     assert(i > -1, "UA header missing");
     eq(a[i - 1], "-H");
   });
   test("User-Agent follows injected manifest version", function () {
     M.setPluginVersion("9.8.7");
-    assert(M.lookupArgs("hello").indexOf("User-Agent: dank-dictionary/9.8.7") > -1);
+    assert(M.lookupArgs("hello").indexOf("User-Agent: dank-dictionary/9.8.7 (https://github.com/quantavil/dank-dictionary)") > -1);
     M.setPluginVersion(releaseVersion);
   });
   test("last arg is the URL with titles=<word>", function () {
@@ -1026,7 +1026,7 @@ group("parseWiktionaryWikitext — IPA integration", function () {
   test("IPA preserved across multiple Pronunciation subsections", function () {
     var text = mkEng("=== Etymology 1 ===\n==== Pronunciation ====\nIPA: /æ/\n==== Pronunciation ====\nIPA: /b/\n==== Noun ====\nA test word.\nUsed in testing.");
     var e = M.parseWiktionaryWikitext("test", text, "en");
-    assert(e !== null); eq(e.phonetic, "/b/");
+    assert(e !== null); eq(e.phonetic, "/æ/");
   });
   test("phonetic empty when no Pronunciation section", function () {
     var text = mkEng("==== Noun ====\nA greeting or salutation.\nA form of address.");
@@ -1159,7 +1159,7 @@ group("webster adapter — argsFor", function () {
 group("websterCanonicalPos", function () {
   var cases = {
     "n": "noun", "n.": "noun", "prop. n.": "noun",
-    "v. t.": "verb", "v. i.": "verb", "v.": "verb",
+    "v. t.": "transitive verb", "v. i.": "intransitive verb", "v.": "verb",
     "a.": "adjective", "adv.": "adverb", "prep.": "preposition",
     "pron.": "pronoun", "conj.": "conjunction", "interj.": "interjection",
     "definite article": "article", "": ""
@@ -1188,7 +1188,7 @@ group("parseWebsterJson", function () {
     assert.strictEqual(r.entry.meanings[0].definitions.length, 2);
     assert.strictEqual(r.entry.meanings[0].definitions[0].definition,
       "The fleshy pome of a rosaceous tree.");
-    assert.strictEqual(r.entry.meanings[1].partOfSpeech, "verb");
+    assert.strictEqual(r.entry.meanings[1].partOfSpeech, "intransitive verb");
   });
   test("lookup is case-insensitive", function () {
     assert(M.parseWebsterJson(WEBSTER_FIXTURE, "Apple").ok);
@@ -1228,6 +1228,78 @@ group("websterKey / websterBucket", function () {
     assert.strictEqual(M.websterBucket("apple"), "a");
     assert.strictEqual(M.websterBucket("1st-class"), "other");
     assert.strictEqual(M.websterBucket(""), "other");
+  });
+});
+
+group("dictionary-backed suggestions", function () {
+  test("adjacent transposition counts as one edit", function () {
+    eq(M.damerauLevenshtein("teh", "the"), 1);
+  });
+  test("offline bucket supplies rare headword candidates", function () {
+    M.parseWebsterJson(JSON.stringify({"zymurgy":{w:"Zymurgy",pos:[["n",["Fermentation science."]]]}}), "zymurgi");
+    eq(M.fuzzyMatch("zymurgi").autoMatch, "zymurgy");
+  });
+  test("verb transitivity and common inflection POS survive", function () {
+    eq(M.websterCanonicalPos("v. t."), "transitive verb");
+    eq(M.websterCanonicalPos("v. i."), "intransitive verb");
+    eq(M.websterCanonicalPos("p. p."), "past participle");
+    eq(M.websterCanonicalPos("n. pl."), "plural noun");
+  });
+});
+
+group("review regressions", function () {
+  test("numbered pronunciations keep the first IPA", function () {
+    var entry = M.parseWiktionaryWikitext("test", "== English ==\n=== Pronunciation 1 ===\nIPA: /first/\n=== Pronunciation 2 ===\nIPA: /second/\n=== Noun ===\nA test.", "en");
+    eq(entry.phonetic, "/first/");
+  });
+  test("summary lists each part of speech once", function () {
+    eq(M.summaryLabel({ meanings: [{partOfSpeech:"noun"},{partOfSpeech:"verb"},{partOfSpeech:"noun"}] }), "noun · verb");
+  });
+  test("native etymology recurses without becoming a sense", function () {
+    var e = M.parseWiktionaryWikitext("maison", "== Français ==\n=== Étymologie 1 ===\nDu latin.\n==== Nom commun ====\nUn bâtiment.\n=== Prononciation ===\nIPA: /mɛzɔ̃/\n=== Traductions ===\nEnglish: house", "fr");
+    eq(e.meanings.length, 1); eq(e.meanings[0].partOfSpeech, "Nom commun"); eq(e.phonetic, "/mɛzɔ̃/");
+  });
+  test("native Russian language selected with level-one headings", function () {
+    var e = M.parseWiktionaryWikitext("дом", "= English =\n=== Noun ===\nWrong.\n= Русский =\n=== Семантические свойства ===\n==== Значение ====\nЖилище.\n=== Этимология ===\nOld root.", "ru");
+    eq(e.meanings.length, 1); eq(e.meanings[0].definitions[0].definition, "Жилище.");
+  });
+  test("Portuguese level-two POS under level-one language", function () {
+    var e = M.parseWiktionaryWikitext("casa", "= Português =\n== Substantivo ==\nUma moradia.\n== Etimologia ==\nLatin.\n== Pronúncia ==\nIPA: /caza/", "pt");
+    eq(e.meanings.length, 1); eq(e.phonetic, "/caza/");
+  });
+  test("Dutch native language wins over first language", function () {
+    var e=M.parseWiktionaryWikitext("huis", "== English ==\n=== Noun ===\nWrong.\n== Nederlands ==\n==== Zelfstandig naamwoord ====\nEen woning.", "nl");
+    eq(e.meanings[0].definitions[0].definition, "Een woning.");
+  });
+  test("German meanings exclude examples and metadata", function () {
+    var e=M.parseWiktionaryWikitext("Haus", "== Haus (Deutsch) ==\n=== Substantiv, n ===\nWorttrennung:\nHaus\nAussprache:\nIPA: [haʊs]\nBedeutungen:\n[1] Gebäude\nBeispiele:\n[1] Ein Haus.", "de");
+    deepEq(e.meanings[0].definitions.map(function(d){return d.definition;}), ["Gebäude"]);
+  });
+  test("Polish body meanings exclude examples", function () {
+    var e=M.parseWiktionaryWikitext("dom", "== dom (język polski) ==\nwymowa:\nIPA: [dom]\nznaczenia:\nrzeczownik\n(1.1) budynek\nodmiana:\n(1.1) domy\nprzykłady:\n(1.1) Mój dom.", "pl");
+    eq(e.meanings[0].definitions[0].definition, "budynek"); eq(e.meanings[0].definitions.length, 1);
+  });
+  test("missing network response remains a source failure", function () {
+    eq(M.parseResponse('{"error":{"code":"ratelimited","info":"Try later"}}', "en").kind, "network");
+  });
+  test("Wiktionary tries case variants after the exact title misses", function () {
+    var raw={query:{pages:{"-1":{title:"haus",missing:""},"42":{title:"Haus",extract:"== Haus (Deutsch) ==\n=== Substantiv ===\nEin Gebäude."}}}};
+    var r=M.ADAPTER_WIKTIONARY.parse(JSON.stringify(raw), "haus", "de");
+    assert(r.ok); eq(r.entry.word,"Haus");
+  });
+  test("exact title has priority over case variants", function () {
+    var raw={query:{pages:{"1":{title:"Haus",extract:"== Deutsch ==\n=== Noun ===\nUppercase."},"8":{title:"haus",extract:"== Deutsch ==\n=== Verb ===\nLowercase."}}}};
+    eq(M.ADAPTER_WIKTIONARY.parse(JSON.stringify(raw), "haus", "de").entry.word,"haus");
+  });
+  test("curl identifies contact and bounds protocol and size", function () {
+    var a=M.lookupArgs("haus","de");
+    assert(a.some(function(v){return v.indexOf("https://github.com/quantavil/dank-dictionary") !== -1;}));
+    eq(a[a.indexOf("--proto")+1], "=https"); eq(a[a.indexOf("--max-filesize")+1], "2097152");
+    deepEq(M.ADAPTER_WIKTIONARY.wordsFor("haus", "de"), ["haus", "Haus"]);
+    assert(decodeURIComponent(a[a.length-1]).indexOf("titles=haus") !== -1);
+  });
+  test("inherited bucket names are not dictionary entries", function () {
+    eq(M.parseWebsterJson('{}', "__proto__").kind, "notfound");
   });
 });
 

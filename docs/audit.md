@@ -68,3 +68,74 @@ panel runtime 45, downloader 10). The lifecycle tests exercise real subprocesses
 for lookup, cancellation, fuzzy recovery and failed launch, plus controlled event
 permutations for the completion transition. DMS visual boundaries are stubbed.
 Generated dictionary data and keyboard shortcut configuration were not changed.
+
+## Follow-up static review (2026-10-04)
+
+Reviewed against the installed DMS/Qt 6 runtime, with live extracts from all 23
+editions, synthetic parser fixtures, real isolated Quickshell processes, and a
+verified GCIDE rebuild. This table distinguishes faults from optional features.
+
+| Finding | Verdict | Resolution / evidence |
+|---|---|---|
+| 1. Network failures become misses | True | Preserve exit code/crash status through EOF/exit join. Source errors override misses; only definitive missing entries permit fuzzy recovery. Test curl exit 28 and successful offline lookup afterward. |
+| 2. Manifest JSON interrupts initialization | True | Initialize data independently; catch metadata parse errors. Corrupt-manifest runtime test verifies registration and offline search. |
+| 3. Escape leaves results | False for installed DMS | DankTextField forwards TextInput.textChanged as textEdited, including programmatic clears. Runtime test confirms empty text resets results. |
+| 4. Header-only pronunciation discarded | True | Store pronunciation before the no-definitions return; rebuild generated data. Restored 493 headwords; empty pronunciation count fell from 82,392 to 81,899. |
+| 5. gzip timestamps | Version-dependent | Python 3.14 already defaults to zero, but supported Python 3.11 does not. Explicit mtime=0 and historical-default regression test. |
+| 6. Data license URL drift | True | Regenerated notice now matches HTTPS source in the builder. |
+| 7. User-Agent contact missing | True | Add repository URL; version still comes from plugin.json. |
+| Case-sensitive titles | True as a general limitation; both haus and Haus actually exist | Optional adapter wordsFor supplies exact/lowercase/capitalized attempts. Retry only missing titles, never outages. One title per request: full-article extracts are limited to one extract even with multiple titles. |
+| Native structural sections become POS / swallow nested senses | True | Recognize observed native etymology, pronunciation and auxiliary headings; recurse etymologies. German/Polish body labels and Indonesian direct senses also need format-specific extraction. |
+| Native language headings missing | True; exact “17” count inaccurate | Correct native names and aliases, support level-one Russian/Portuguese languages and decorated headings. Preserve intentional first-language fallback. |
+| Last pronunciation wins / numbered pronunciation omitted | True | Strip numbered suffixes consistently; first nonempty IPA wins. |
+| Webster transitivity / raw common POS / repeating subtitle | True for stated display loss | Preserve transitive/intransitive verbs, participles and plural nouns; dedupe subtitle. Unknown POS still intentionally passes through. |
+| All dogs/running/went miss offline | Partly false | Running and went already exist; dogs is absent. Suffix guessing is a new stemming feature, not a safe correctness fix: it can change the headword and sense. No guessing added. |
+| Inflection detector returns null | True minor contract issue | Return false for a delimiter-only head. |
+| Verb test needs parentheses | False positive | JavaScript precedence already gives the intended result. |
+| Inherited data[key] | True hardening, no demonstrated exploit | Require own property; __proto__ now reports notfound. |
+| XML double entity decoding | True | XML parser decodes entities; remove the second html.unescape pass. |
+| Enter resubmits during loading | True | Guard accepted event, matching disabled Search button. |
+| Keyboard scrolling / scrollbar / copying absent | True | PageUp/PageDown actions, native DankScrollbar and selectable read-only plain-text definitions. Runtime tests cover scrolling, selection and height. |
+| Edition change discards word | True UX issue | Preserve word and rerun against chosen edition; clarify definition language in accessibility label and README. |
+| Repeated notfound text | True | Remove duplicate message line. |
+| Suggestions subtitle stays idle | True | Show choose-a-suggestion status. |
+| Idle hint ignores selected edition | True | Non-English hint names its online edition. |
+| API error wording | True UX issue | Use “lookup unavailable” and explain unavailable Wiktionary source. |
+| Header width can vanish | True | RowLayout reserves headword width and caps phonetic width; source has its own line. Long-phonetic runtime regression. |
+| Result height uses arbitrary reserve | True | Use measured control/header heights instead of a guessed reserve. Long-entry runtime verifies popup fits its maximum height. |
+| Missing link/history | Feature proposals | No existing contract requires either; not bugs. |
+| IPC punctuation stripping | Feature proposal | Input is a literal dictionary title; punctuation may itself be meaningful. No blanket stripping. |
+| Hide U+FFFD phonetics | Deliberately deferred | Preserve locked upstream-data policy. Rebuild does not sanitize pronunciation. |
+| Free Dictionary compatibility is dead production code | Factually inactive, removal conflicts with locked decision | Retain tested compatibility normalization and rendering. It has coverage, not “zero tests”; misleading one-line rollback comment corrected. |
+| panelWidth unused | True | Remove unused competing width property. |
+| typeof Model guards mask imports | True redundancy | Remove guards for required Model initialization, language and adapter functions. |
+| Repeated focus scheduling | True redundancy | Coalesce pending focus work while retaining queued DMS-focus handling and close guard. |
+| Duplicate etymology checks | True redundancy | Use structural key classification once. |
+| programmaticEdit unnecessary | False for installed DMS | Programmatic edits emit textEdited; removing guard breaks automatic recovery. |
+| var word twice | True harmless redundancy | Use title for the Wiktionary branch. |
+| Accent handling dead | Not a correctness bug | Injected accented candidates are supported and tested; harmless generic support retained. |
+| /tmp/gcide ignore ineffective | True | Remove ineffective repository-root pattern; archive/directory patterns remain. |
+| Stale comments / missing README period | True | Update BCP 47, compatibility/fuzzy/path comments and README punctuation. |
+| Frequency list suggests non-dictionary tokens | True | Remove frequency asset; use actual current Webster bucket keys, including rare words. |
+| Transposition costs two edits | True algorithm limitation | Optimal-string-alignment Damerau distance counts adjacent swaps as one; ambiguous short words remain suggestions. |
+| Bucket-memory claim contradicts implementation | True documentation error | Document buffered parsing of one bucket (largest current bucket ~2.2 MB), not streaming single-entry parsing. No unnecessary format migration. |
+| Missing .pragma library | Not automatically a bug | Model contains per-panel mutable adapter configuration/candidates. Sharing it changes ownership semantics. Removed duplicated frequency asset instead. |
+| Replace extracts with REST definitions | Incompatible feature proposal | Live English REST request worked; French and German returned HTTP 501. It cannot replace the 23-edition adapter. |
+| No data smoke or CI | True coverage gap | Add separate read-only 27-bucket/20-word/8-pronunciation smoke check and CI pure checks. Main runtime suite stays synthetic and offline. |
+| curl protocol/size limits | Useful hardening | Restrict to HTTPS and cap response at 2 MiB. Existing timeout, argv isolation, language allowlist and PlainText handling remain. |
+
+Live probes returned usable selected-language senses for 21 sampled editions.
+The sampled Arabic page had an empty extract, and Japanese 水 had no senses in
+its Japanese section. Those are source/coverage limitations, not claimed fixes;
+an unusable response now shows a source error instead of spelling correction.
+Extracts still flatten examples into text, so heuristic parsing is not lossless.
+
+References: [Wikimedia User-Agent policy](https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy),
+[English-only structured definition implementation](https://www.mediawiki.org/wiki/Wikimedia_Apps/Wiktionary_definition_popups_in_the_Android_Wikipedia_app).
+The installed DankTextField source, rather than stock Qt textEdited semantics,
+establishes the Escape/programmatic-edit verdicts.
+
+Validation: 419 checks pass (312 model, 24 state, 66 panel, 2 malformed-manifest,
+13 build/downloader, 2 source lint), plus separate real-data smoke verification.
+Generated buckets were rebuilt from the pinned verified archive, never edited by
+hand. CI checks do not replace the required local Quickshell runtime suite.

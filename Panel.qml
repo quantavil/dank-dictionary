@@ -1,13 +1,13 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Common
 import qs.Widgets
 import "."
 import "Model.js" as Model
-import "wordlist.js" as Wordlist
 
 // Dictionary search panel. The bar widget owns a magnify glyph that toggles
 // this popup; everything user-facing lives here — the search field, the
@@ -60,7 +60,10 @@ Item {
   }
 
   Keys.onPressed: function(event) {
-    if (event.key === Qt.Key_Escape) {
+    if (root.status === "ok" && (event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp)) {
+      root.scrollResults(event.key === Qt.Key_PageDown ? 1 : -1)
+      event.accepted = true
+    } else if (event.key === Qt.Key_Escape) {
       if (searchField.getActiveFocus() && searchField.text.length > 0)
         searchField.text = ""
       else root.close()
@@ -69,6 +72,22 @@ Item {
       root.refreshFocus()
       event.accepted = true
     }
+  }
+
+  function scrollResults(direction) {
+    resultScroll.contentY = Math.max(0, Math.min(resultScroll.contentHeight - resultScroll.height,
+      resultScroll.contentY + direction * resultScroll.height * 0.9))
+  }
+
+  function nonResultHeight() {
+    var height = 0, count = 0
+    for (var i = 0; i < panelColumn.children.length; i++) {
+      var item = panelColumn.children[i]
+      if (item === resultsColumn || !item.visible || item.height <= 0) continue
+      height += item.height
+      count++
+    }
+    return height + count * panelColumn.spacing
   }
 
   // ---- Search state. status drives which body section (hero + list) the
@@ -81,7 +100,7 @@ Item {
   // Target language for lookups. Driven by the dropdown in the popup
   // header; default comes from Model.defaultLanguage so the panel and
   // data layer stay in sync.
-  property string language: Model.defaultLanguage ? Model.defaultLanguage() : "en"
+  property string language: Model.defaultLanguage()
 
   // ---- Fuzzy state. Populated only when the user's exact query was a 404
   //      and the local wordlist surfaced closer candidates. suggestions is
@@ -106,17 +125,17 @@ Item {
   //      future source is a new adapter plus one line in Model.js.
   property var adapterQueue: []
   property int adapterIndex: 0
+  property int adapterVariantIndex: 0
+  property var chainFailure: null
 
   readonly property color contentForeground: Theme.surfaceText
   readonly property string contentFontFamily: Theme.fontFamily
 
   readonly property string heroSummary: entry ? Model.summaryLabel(entry) : ""
-  readonly property int panelWidth: Math.round(Theme.fontSizeMedium * 30)
   readonly property int panelMaxHeight: Math.min(Math.round(Theme.fontSizeMedium * 44),
     parentPopout && parentPopout.screen ? parentPopout.screen.height - (hostWidget ? hostWidget.barThickness : 48) - Theme.spacingXL * 2 : 620)
 
-  // Bundled offline dictionary data (data/webster). Same URL-to-path
-  // decoding: Qt.resolvedUrl returns a
+  // Bundled offline dictionary data (data/webster). Qt.resolvedUrl returns a
   // percent-encoded file:// URL, so strip the scheme and decode it back
   // into a real filesystem path for the lookup process.
   readonly property string dataDir: {
@@ -142,14 +161,15 @@ Item {
     blockLoading: true
   }
 
-  // Inject the bundled wordlist into Model.js so fuzzyMatch() can use it,
-  // and the bundled offline data dir so the local adapter can find it.
+  // Initialize the offline adapter and optional release metadata independently.
   Component.onCompleted: {
-    Model.setPluginVersion(JSON.parse(manifestFile.text()).version)
-    if (typeof Model.setWordlist === "function" && typeof Wordlist.ENGLISH_WORDLIST !== "undefined")
-      Model.setWordlist(Wordlist.ENGLISH_WORDLIST)
-    if (typeof Model.setDataDir === "function")
-      Model.setDataDir(root.dataDir)
+    Model.setDataDir(root.dataDir)
+    try {
+      Model.setPluginVersion(JSON.parse(manifestFile.text()).version)
+    } catch (e) {
+      Model.setPluginVersion("")
+      console.warn("dank-dictionary: manifest version unavailable:", e)
+    }
     if (root.hostWidget) root.hostWidget.panelItem = root
   }
 
@@ -175,11 +195,14 @@ Item {
   }
 
   // ---- Focus handling. The field owns initial focus; Esc redirects to close.
+  property bool focusPending: false
   function refreshFocus() {
-    if (!root.opened) return
+    if (!root.opened || root.focusPending) return
+    root.focusPending = true
     // DMS first focuses its popup container. Focus the editor after that turn.
     Qt.callLater(function() {
       Qt.callLater(function() {
+        root.focusPending = false
         if (!root.opened) return
         searchField.forceActiveFocus()
         if (String(searchField.text || "").length > 0) searchField.selectAll()
@@ -201,9 +224,10 @@ Item {
       root.resetResults()
       return
     }
-    root.adapterQueue = (typeof Model.adaptersFor === "function")
-      ? Model.adaptersFor(root.language) : []
+    root.adapterQueue = Model.adaptersFor(root.language)
+    root.chainFailure = null
     root.adapterIndex = 0
+    root.adapterVariantIndex = 0
 
     root.statusMessage = ""
     if (!preserveRecovery) root.resetResults()
@@ -223,6 +247,8 @@ Item {
   property var pendingArgs: []
   property bool processStarted: false
   property bool processExited: false
+  property int processExitCode: 0
+  property bool processCrashed: false
   property bool stdoutFinished: false
   property string adapterOutput: ""
   property bool processBusy: false
@@ -241,10 +267,13 @@ Item {
     root.pendingArgs = []
     root.activeGeneration = root.lookupGeneration
     root.activeAdapter = root.adapterQueue[root.adapterIndex]
-    root.activeQuery = root.query
+    var words = root.activeAdapter.wordsFor ? root.activeAdapter.wordsFor(root.query, root.language) : [root.query]
+    root.activeQuery = words[root.adapterVariantIndex]
     root.activeLanguage = root.language
     root.processStarted = false
     root.processExited = false
+    root.processExitCode = 0
+    root.processCrashed = false
     root.stdoutFinished = false
     root.adapterOutput = ""
     root.processBusy = true
@@ -259,7 +288,8 @@ Item {
       var adapter = root.adapterQueue[root.adapterIndex]
       var args = []
       try {
-        args = adapter.argsFor(root.query, root.language) || []
+        var words = adapter.wordsFor ? adapter.wordsFor(root.query, root.language) : [root.query]
+        args = adapter.argsFor(words[root.adapterVariantIndex], root.language) || []
       } catch (e) {
         console.warn("dank-dictionary: adapter", adapter && adapter.id, "argsFor failed:", e)
       }
@@ -270,6 +300,7 @@ Item {
         return
       }
       root.adapterIndex++
+      root.adapterVariantIndex = 0
     }
     // No adapter could even start — handle as an exhausted chain.
     onAdapterChainExhausted({ ok: false, kind: "error", error: "no dictionary source available" })
@@ -277,7 +308,15 @@ Item {
 
   // Advance to the next adapter in the chain. Returns true when another
   // adapter started; false when the chain is exhausted.
-  function tryNextAdapter() {
+  function tryNextAdapter(result) {
+    var adapter = root.adapterQueue[root.adapterIndex]
+    var words = adapter && adapter.wordsFor ? adapter.wordsFor(root.query, root.language) : [root.query]
+    if (result && result.kind === "notfound" && root.adapterVariantIndex + 1 < words.length) {
+      root.adapterVariantIndex++
+      runAdapter()
+      return true
+    }
+    root.adapterVariantIndex = 0
     root.adapterIndex++
     if (root.adapterIndex < root.adapterQueue.length) {
       runAdapter()
@@ -291,7 +330,7 @@ Item {
   // notfound-ish results get fuzzy recovery, anything else is an error.
   function onAdapterChainExhausted(result) {
     root.entry = null
-    if (result && (result.kind === "notfound" || result.kind === "invalid" || result.kind === "empty")) {
+    if (result && result.kind === "notfound") {
       if (root.isAutoMatched) {
         // Recovery round tripped without finding a working word —
         // don't loop, just show the notfound state.
@@ -356,13 +395,17 @@ Item {
 
   // All process events join here. A normal run needs both EOF and exit,
   // in either order; FailedToStart has neither started nor exited signals.
-  function adapterEvent(event, output) {
+  function adapterEvent(event, output, exitCode, exitStatus) {
     if (!root.processBusy) return
     if (event === "started") root.processStarted = true
     else if (event === "stdout") {
       root.stdoutFinished = true
       root.adapterOutput = output
-    } else if (event === "exited") root.processExited = true
+    } else if (event === "exited") {
+      root.processExited = true
+      root.processExitCode = exitCode === undefined ? 0 : exitCode
+      root.processCrashed = exitStatus !== undefined && exitStatus !== 0
+    }
     else if (event === "stopped") {
       if (root.processStarted) return
       root.processExited = true
@@ -373,7 +416,12 @@ Item {
     root.processBusy = false
     if (root.status === "loading" && root.activeGeneration === root.lookupGeneration) {
       var result = { ok: false, kind: "error", error: "could not start the dictionary command" }
-      if (root.processStarted) {
+      if (root.processStarted && (root.processExitCode !== 0 || root.processCrashed)) {
+        var online = root.activeAdapter && root.activeAdapter.id === "wiktionary"
+        result = { ok: false, kind: online ? "network" : "error", error: online
+          ? "Wiktionary is unavailable. Check your connection or try again later."
+          : "Could not read the offline dictionary." }
+      } else if (root.processStarted) {
         try {
           result = root.activeAdapter.parse(root.adapterOutput, root.activeQuery, root.activeLanguage)
         } catch (e) {
@@ -385,8 +433,10 @@ Item {
         root.entry = result.entry
         root.status = "ok"
         root.statusMessage = ""
-      } else if (!root.tryNextAdapter()) {
-        root.onAdapterChainExhausted(result)
+      } else {
+        // A source outage is not evidence that the user's spelling is wrong.
+        if (!result || result.kind !== "notfound") root.chainFailure = result || { kind: "error", error: "Dictionary source failed." }
+        if (!root.tryNextAdapter(result)) root.onAdapterChainExhausted(root.chainFailure || result)
       }
     }
     if (root.pendingArgs.length > 0) Qt.callLater(root.startPendingAdapter)
@@ -399,7 +449,7 @@ Item {
       onStreamFinished: root.adapterEvent("stdout", text)
     }
     onStarted: root.adapterEvent("started", "")
-    onExited: root.adapterEvent("exited", "")
+    onExited: function(exitCode, exitStatus) { root.adapterEvent("exited", "", exitCode, exitStatus) }
     onRunningChanged: {
       if (!running) {
         var generation = root.activeGeneration
@@ -464,7 +514,8 @@ Item {
                 }
                 if (root.status === "loading") return "looking up…"
                 if (root.status === "notfound") return "no definition"
-                if (root.status === "error") return "couldn't reach the API"
+                if (root.status === "suggestions") return "choose a suggestion"
+                if (root.status === "error") return "lookup unavailable"
                 return "look up a word"
               }
               textFormat: Text.PlainText
@@ -481,7 +532,7 @@ Item {
           // Language switcher in the top right of the popup. Data-driven
           // from Model.languages() (sorted alphabetically by English
           // label in JS) so adding a language is a one-entry edit.
-          // Changing language clears the previous query and result.
+          // Changing edition reruns the current word.
           DankDropdown {
             id: languageDropdown
             readonly property var languages: Model.languages()
@@ -491,6 +542,7 @@ Item {
                 if (languages[i].value === root.language) return languages[i].label
               return "English"
             }
+            Accessible.name: "Wiktionary edition (language of definitions)"
             compactMode: true
             dropdownWidth: Theme.fontSizeMedium * 10
             alignPopupRight: true
@@ -505,13 +557,8 @@ Item {
               for (var i = 0; i < languages.length; i++)
                 if (languages[i].label === label) newValue = languages[i].value
               if (newValue === root.language) return
-              root.cancelLookup()
               root.language = newValue
-              root.resetResults()
-              root.programmaticEdit = true
-              searchField.text = ""
-              root.programmaticEdit = false
-              root.query = ""
+              root.runLookup()
               root.refreshFocus()
             }
           }
@@ -536,7 +583,7 @@ Item {
             showClearButton: true
             onTextEdited: root.applyEdited()
             onAccepted: {
-              root.runLookup()
+              if (root.status !== "loading") root.runLookup()
             }
           }
           DankButton {
@@ -591,7 +638,9 @@ Item {
 
               Text {
                 width: (parent ? parent.width : 0)
-                text: "English uses bundled Webster’s 1913 data first, with Wiktionary as fallback."
+                text: root.language === "en"
+                  ? "English uses bundled Webster’s 1913 data first, with Wiktionary as fallback."
+                  : Model.langLabel(root.language) + " definitions use Wiktionary online."
                 color: Theme.surfaceVariantText
                 font.family: root.contentFontFamily
                 font.pixelSize: Theme.fontSizeSmall
@@ -697,16 +746,6 @@ Item {
                 wrapMode: Text.WordWrap
               }
 
-              Text {
-                width: (parent ? parent.width : 0)
-                visible: root.statusMessage !== ""
-                text: root.statusMessage
-                textFormat: Text.PlainText
-                color: Theme.surfaceVariantText
-                font.family: root.contentFontFamily
-                font.pixelSize: Theme.fontSizeSmall
-                wrapMode: Text.WordWrap
-              }
             }
 
             // Error.
@@ -740,8 +779,9 @@ Item {
 
         // ---------- Results: word header + scrollable meaning list ----------
         Column {
+          id: resultsColumn
           width: (parent ? parent.width : 0)
-          spacing: (Theme.spacingM * 0.833)
+          spacing: Theme.spacingS
           visible: root.status === "ok" && root.entry !== null
 
           // Auto-match note. Only rendered when the user's original query
@@ -751,6 +791,7 @@ Item {
           // pattern raises "Cannot read property 'word' of null" in QML
           // because it pre-evaluates both sides of `?:`.
           Text {
+            id: recoveryNote
             width: (parent ? parent.width : 0)
             visible: root.isAutoMatched && root.originalQuery !== "" && root.entry !== null
             text: root.autoMatchedNote()
@@ -762,64 +803,64 @@ Item {
             wrapMode: Text.WordWrap
           }
 
-          Row {
-            width: (parent ? parent.width : 0)
-            spacing: (Theme.spacingM * 0.833)
-
-            Text {
-              id: wordText
-              text: root.entryWord()
-              textFormat: Text.PlainText
-              color: root.contentForeground
-              font.family: root.contentFontFamily
-              font.pixelSize: Math.round(Theme.fontSizeLarge * 1.65)
-              font.bold: true
-              elide: Text.ElideRight
-              width: (parent ? parent.width : 0) - phoneticLabel.width - sourceTag.width - (Theme.fontSizeMedium * 1.429)
-              anchors.verticalCenter: parent.verticalCenter
+          Column {
+            id: resultHeader
+            width: parent.width
+            spacing: Theme.spacingXS
+            RowLayout {
+              width: parent.width
+              spacing: Theme.spacingS
+              Text {
+                id: wordText
+                Layout.fillWidth: true
+                Layout.minimumWidth: Math.min(implicitWidth, Theme.fontSizeMedium * 6)
+                text: root.entryWord()
+                textFormat: Text.PlainText
+                color: root.contentForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Math.round(Theme.fontSizeLarge * 1.65)
+                font.bold: true
+                elide: Text.ElideRight
+              }
+              Text {
+                id: phoneticLabel
+                Layout.maximumWidth: parent.width * 0.45
+                text: root.entryPhonetic()
+                textFormat: Text.PlainText
+                color: Theme.surfaceVariantText
+                font.family: root.contentFontFamily
+                font.pixelSize: Theme.fontSizeMedium
+                font.italic: true
+                elide: Text.ElideRight
+                visible: text !== ""
+              }
             }
-
             Text {
-              id: phoneticLabel
-              text: root.entryPhonetic()
-              textFormat: Text.PlainText
-              color: Theme.surfaceVariantText
-              font.family: root.contentFontFamily
-              font.pixelSize: Theme.fontSizeMedium
-              font.italic: true
-              anchors.verticalCenter: parent.verticalCenter
-              visible: text !== ""
-            }
-
-            // Small muted source tag (e.g. "Wiktionary") to make it obvious
-            // which data source filled the panel.
-            Text {
-              id: sourceTag
+              width: parent.width
               text: root.entry ? Model.sourceLabel(entry) : ""
               textFormat: Text.PlainText
               color: Theme.surfaceVariantText
               font.family: root.contentFontFamily
               font.pixelSize: Theme.fontSizeSmall
               font.italic: true
-              anchors.verticalCenter: parent.verticalCenter
-              visible: text !== ""
             }
           }
 
           Flickable {
             id: resultScroll
             width: (parent ? parent.width : 0)
-            height: Math.min(
-              root.panelMaxHeight - (Theme.fontSizeMedium * 22.857),
-              Math.max((Theme.fontSizeMedium * 11.429), root.entry
-                ? Math.min((Theme.fontSizeMedium * 38.571), meaningStack.implicitHeight + (Theme.spacingL))
-                : (Theme.fontSizeMedium * 11.429))
-            )
+            // Reserve measured header/control heights, including recovery text.
+            readonly property real reservedHeight: root.nonResultHeight()
+              + resultHeader.height + (recoveryNote.visible ? recoveryNote.height : 0)
+              + resultsColumn.spacing * (recoveryNote.visible ? 2 : 1)
+            height: Math.max(1, Math.min(contentHeight, root.panelMaxHeight - reservedHeight))
             contentWidth: width
             contentHeight: meaningStack.implicitHeight + (Theme.spacingL)
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             interactive: contentHeight > height
+            onContentHeightChanged: contentY = 0
+            ScrollBar.vertical: DankScrollbar { targetFlickable: resultScroll }
 
             Column {
               id: meaningStack
@@ -887,14 +928,18 @@ Item {
                           anchors.topMargin: 2
                         }
 
-                        Text {
+                        TextEdit {
+                          readOnly: true
+                          selectByMouse: true
+                          selectionColor: Theme.primary
+                          selectedTextColor: Theme.surfaceText
                           width: (parent ? parent.width : 0) - (Theme.fontSizeMedium * 1.429) - (Theme.spacingS)
                           text: modelData.definition
-                          textFormat: Text.PlainText
+                          textFormat: TextEdit.PlainText
                           color: root.contentForeground
                           font.family: root.contentFontFamily
                           font.pixelSize: Theme.fontSizeMedium
-                          wrapMode: Text.WordWrap
+                          wrapMode: TextEdit.WordWrap
                         }
                       }
 

@@ -25,6 +25,22 @@ ShellRoot {
         }
         return null
     }
+    function findScroll(item) {
+        if ("flickableDirection" in item) return item
+        for (var i = 0; i < item.children.length; i++) {
+            var found = findScroll(item.children[i])
+            if (found) return found
+        }
+        return null
+    }
+    function findText(item, text) {
+        if ("text" in item && item.text === text) return item
+        for (var i = 0; i < item.children.length; i++) {
+            var found = findText(item.children[i], text)
+            if (found) return found
+        }
+        return null
+    }
     function findLanguageDropdown(item) {
         if ("maxPopupHeight" in item && "options" in item) return item
         for (var i = 0; i < item.children.length; i++) {
@@ -53,6 +69,7 @@ ShellRoot {
         } }
         panel.processBusy = true
         panel.processStarted = true
+        panel.processExitCode = 0
         panel.processExited = false
         panel.stdoutFinished = false
         panel.adapterEvent(first, "ordered")
@@ -146,7 +163,7 @@ ShellRoot {
                     root.check(panel.status === "ok", "offline lookup succeeds")
                     root.check(panel.entry.word === "hello" && panel.entry.source === "webster1913",
                                "actual gzip collector and Webster adapter parse fixture")
-                    root.check(panel.adapterQueue[1].argsFor("hello", "en").indexOf("User-Agent: dank-dictionary/9.8.7") >= 0,
+                    root.check(panel.adapterQueue[1].argsFor("hello", "en").indexOf("User-Agent: dank-dictionary/9.8.7 (https://github.com/quantavil/dank-dictionary)") >= 0,
                                "request version comes from synthetic manifest release")
                     root.check(root.findLanguageDropdown(panel).maxPopupHeight <= panel.height,
                                "language menu stays bounded when results resize panel")
@@ -287,6 +304,64 @@ ShellRoot {
                     root.check(panel.status === "loading" && panel.entry.word === "ordered",
                                "stale generation cannot publish output")
                     root.check(!panel.processBusy, "stale generation releases process")
+                    root.next()
+                    break
+                case 13:
+                    panel.language = "en"
+                    panel.search("outage")
+                    root.next()
+                    break
+                case 14:
+                    if (panel.status === "loading") break
+                    root.check(panel.status === "error", "curl failure is an error even after offline notfound")
+                    root.check(panel.query === "outage" && !panel.isAutoMatched && panel.suggestions.length === 0,
+                               "network outage does not alter query or suggest corrections")
+                    root.check(panel.statusMessage.indexOf("Wiktionary") >= 0, "network failure explains unavailable source")
+                    panel.search("hello")
+                    root.next()
+                    break
+                case 15:
+                    if (panel.status === "loading") break
+                    root.check(panel.status === "ok", "offline dictionary still works after network failure")
+                    // DankTextField intentionally emits textEdited on programmatic changes.
+                    root.findSearchField(panel).text = ""
+                    root.check(panel.status === "idle" && panel.entry === null, "clearing field resets stale result through DMS signal contract")
+                    panel.search("hello")
+                    var generation = panel.lookupGeneration
+                    root.findSearchField(panel).accepted()
+                    root.check(panel.lookupGeneration === generation, "Enter is ignored while already loading")
+                    root.next()
+                    break
+                case 16:
+                    if (panel.status === "loading") break
+                    root.findLanguageDropdown(panel).valueChanged("French")
+                    root.check(panel.query === "hello" && root.findSearchField(panel).text === "hello",
+                               "edition switch preserves word")
+                    root.check(panel.language === "fr" && panel.status === "loading", "edition switch reruns lookup")
+                    root.next()
+                    break
+                case 17:
+                    if (panel.status === "loading") break
+                    root.check(panel.status === "notfound", "real miss remains notfound after edition switch")
+                    panel.entry = { word: "A very long headword for layout", phonetic: "/" + "pronunciation".repeat(12) + "/", source: "a long source label", meanings: [{partOfSpeech: "noun", synonyms: [], antonyms: [], definitions: [{definition: "A long definition for keyboard scrolling and selection. ".repeat(150), example: "", synonyms: [], antonyms: []}]}] }
+                    panel.status = "ok"
+                    root.next()
+                    break
+                case 18:
+                    if (root.ticks < 3) break
+                    var scroll = root.findScroll(panel)
+                    root.check(scroll !== null && scroll.contentHeight > scroll.height, "long result is scrollable")
+                    root.check(panel.implicitHeight <= panel.panelMaxHeight + 1, "result fits measured popup height budget")
+                    var wordLabel = root.findText(panel, panel.entry.word)
+                    root.check(wordLabel.width > 0 && wordLabel.width >= 80, "long phonetic does not eliminate headword")
+                    panel.scrollResults(1)
+                    root.check(scroll.contentY > 0, "PageDown action advances reading")
+                    panel.scrollResults(-1)
+                    root.check(scroll.contentY === 0, "PageUp action returns to top")
+                    var sense = root.findText(panel, panel.entry.meanings[0].definitions[0].definition)
+                    root.check(sense.readOnly && sense.selectByMouse, "definition supports selection without editing")
+                    sense.select(0, 6)
+                    root.check(sense.selectedText === "A long", "definition text can be selected for copy")
                     root.finish(null)
                     break
                 }
